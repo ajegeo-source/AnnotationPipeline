@@ -1,0 +1,52 @@
+# SAM 3 pasted-exemplar-tile run.
+#
+# Paths are no longer per-dataset. `root` is the folder every project lives
+# under; `dataset` is the one project the SAM 3 script targets on its next run.
+# Everything else is derived - see the layout diagram in ConfigSam3.py.
+#
+# The annotator reads `dataset` only as the entry preselected in its dropdown.
+# It can open any project under root, so pointing this at TillerCounter does
+# not stop you labelling another dataset.
+#
+# Anything in this file changes what lands on disk, so the resolved contents are
+# copied into run_manifest.json next to the outputs.
+paths:
+  root: $HOME/Datasets/ActiveLearningTestDatasets
+  dataset: Project3          # SAM 3's target; must be a folder under root
+annotator:
+  host: 0.0.0.0
+  port: 8000
+run:
+  name: Repro_test     # the run subdirectory under <project>/runs/
+  overwrite: true
+exemplars:
+  source: manifest              # "random_gt" needs a gt/ folder in the project
+  n: 12
+  seed: 0
+  pad: 0.25
+  tile_max_edge: 1024        # cap a tile's long edge (px)
+strip:
+  side: auto                  # auto (long edge) | right | bottom
+  margin: 8                   # px between tiles
+  fill: [114, 114, 114]       # neutral grey for unused strip area
+inference:
+  text_prompt: "crow"           # e.g. "rumex" to combine text + exemplars
+  class_id: 0                 # null = accept every class id
+  conf_threshold: 0.05         # written to disk; the UI filters higher, not this
+  max_edge: 2048              # cap the TARGET's long edge before compositing
+  fast_prompt_append: true
+dataset:
+  num_images: null            # null = every image; int = random subset
+  image_seed: 0
+  image_exts: [".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"]
+predictions:
+  provenance: sam3
+  quality: unverified
+debug:
+  save_overlays: 50
+  save_composites: 5
+  mask_color: [255, 45, 45]
+  mask_alpha: 0.45
+  mask_edge_alpha: 0.95
+  draw_pred_boxes: true
+  draw_gt_boxes: false

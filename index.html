@@ -1,0 +1,1209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>annotator</title>
+<style>
+  :root {
+    --bg:      #14161a;
+    --panel:   #1b1f25;
+    --line:    #2b323b;
+    --text:    #d9dfe7;
+    --dim:     #7c8794;
+    --human:   #a855f7;   /* violet     - drawn here, owned by ANNOTATION_DIR */
+    --pred:    #ff2d2d;   /* red        - read from PREDICTION_DIR, never written */
+    --accept:  #5cc8ff;   /* light blue - a prediction a human approved */
+    --exem:    #ffb01f;   /* amber      - picked as a SAM3 prompt */
+    --done:    #4bd6a4;
+    --pending: #4a5460;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%; overflow: hidden;
+    background: var(--bg); color: var(--text);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  body { display: grid; grid-template-rows: auto 1fr auto; }
+
+  header {
+    display: flex; align-items: center; gap: 18px;
+    padding: 0 14px; height: 40px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+  }
+  .name {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: 12px; letter-spacing: .01em;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    max-width: 40vw;
+  }
+  .counter {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--dim); font-variant-numeric: tabular-nums;
+  }
+  .spacer { flex: 1; }
+  .badge {
+    font-family: ui-monospace, monospace; font-size: 11px;
+    padding: 3px 9px; border: 1px solid var(--line); border-radius: 2px;
+    color: var(--dim); letter-spacing: .04em; text-transform: uppercase;
+    cursor: pointer; user-select: none; background: none;
+  }
+  .badge:hover { border-color: var(--dim); }
+  .badge.on { color: #0d1114; background: var(--done); border-color: var(--done); }
+  .badge:focus-visible { outline: 2px solid var(--human); outline-offset: 2px; }
+
+  .thresh { display: flex; align-items: center; gap: 6px; }
+  .thresh label {
+    font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim);
+    letter-spacing: .04em; text-transform: uppercase;
+  }
+  .thresh input {
+    width: 62px; padding: 3px 6px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 2px;
+    font-family: ui-monospace, monospace; font-size: 11px; text-align: right;
+  }
+  .thresh input:focus { outline: none; border-color: var(--human); }
+  .thresh input.bad { border-color: var(--pred); }
+  .thresh .badge.pending { border-color: var(--human); color: var(--human); }
+  .predcount {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--pred); font-variant-numeric: tabular-nums;
+  }
+  .exemcount {
+    font-family: ui-monospace, monospace; font-size: 12px;
+    color: var(--exem); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .badge.mode-on {
+    color: #0d1114; background: var(--exem); border-color: var(--exem);
+  }
+
+  /* The approve button wears the colour of the boxes it produces. */
+  .badge.approve { border-color: var(--accept); color: var(--accept); }
+  .badge.approve:hover { background: var(--accept); color: #0d1114; }
+  .badge:disabled {
+    opacity: .35; cursor: default;
+    border-color: var(--line); color: var(--dim); background: none;
+  }
+
+  .viewport {
+    position: relative; overflow: hidden;
+    background: #0d0f12; cursor: crosshair;
+  }
+  .viewport.panning { cursor: grabbing; }
+  /* Mode errors are expensive here - a stray exemplar ends up prompting a run -
+     so the whole viewport carries the mode, not just a button in the corner. */
+  .viewport.exemplar::after {
+    content: ""; position: absolute; inset: 0; pointer-events: none;
+    border: 2px solid var(--exem);
+  }
+  .stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
+  .stage img { display: block; width: 100%; height: 100%; user-select: none; }
+  .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+
+  /* Hit testing is done in image coordinates against the box list, not by
+     asking the DOM what was clicked, so nothing here needs pointer events. */
+  .stage rect {
+    fill: transparent; stroke-width: 2px; pointer-events: none;
+    vector-effect: non-scaling-stroke;
+  }
+  .stage rect.human  { stroke: var(--human); }
+  .stage rect.pred   { stroke: var(--pred); }
+  .stage rect.accept {
+    stroke: var(--accept); stroke-dasharray: 1 9; stroke-linecap: round;
+  }
+  .stage rect.draft  { stroke: var(--human); stroke-dasharray: 3 3; }
+  .stage rect.exem {
+    stroke: var(--exem); fill: rgba(255, 176, 31, .10);
+  }
+  .stage rect.draft.exem { stroke: var(--exem); fill: transparent; }
+
+  /* Selection is a wash of the box's own colour - the stroke pattern is what
+     tells you where a box came from, so selection must not touch it. */
+  .stage rect.human.sel  { fill: rgba(168, 85, 247, .16); }
+  .stage rect.pred.sel   { fill: rgba(255, 45,  45, .14); }
+  .stage rect.accept.sel { fill: rgba( 92, 200, 255, .14); }
+  .stage rect.exem.sel   { fill: rgba(255, 176,  31, .26); }
+
+  .stage rect.handle { stroke: #0d0f12; stroke-width: 1px; }
+  .stage rect.handle.human  { fill: var(--human); }
+  .stage rect.handle.pred   { fill: var(--pred); }
+  .stage rect.handle.accept { fill: var(--accept); }
+
+  .hint {
+    position: absolute; left: 12px; bottom: 12px;
+    font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim);
+    background: rgba(13,15,18,.82); border: 1px solid var(--line);
+    border-radius: 2px; padding: 7px 10px; line-height: 1.7;
+    pointer-events: none;
+  }
+  .hint b { color: var(--text); font-weight: 500; }
+
+  footer { background: var(--panel); border-top: 1px solid var(--line); }
+  #ribbon { display: block; width: 100%; height: 26px; cursor: pointer; }
+  .badge.danger { color: #ff6b6b; }
+  .badge.danger:disabled { color: var(--line); cursor: default; }
+  .picker { background: var(--panel); color: inherit; border: 1px solid var(--line);
+            border-radius: 4px; padding: 2px 4px; font: inherit; max-width: 22vw; }
+</style>
+</head>
+<body>
+
+<header>
+  <select id="projectSel" class="picker" title="dataset &mdash; drives images, annotations and flags"></select>
+  <select id="runSel" class="picker" title="run &mdash; drives predictions and exemplars"></select>
+  <button class="badge danger" id="delRun"
+          title="delete the selected run and everything in it">&#10005;</button>
+  <span class="name" id="name">&mdash;</span>
+  <span class="counter" id="counter"></span>
+  <span class="counter" id="boxcount"></span>
+  <span class="predcount" id="predcount"></span>
+  <span class="exemcount" id="exemcount"></span>
+  <span class="spacer"></span>
+  <button class="badge" id="mode"
+          title="e &mdash; draw annotations, or pick exemplars for the SAM3 prompt">annotating</button>
+  <span class="thresh">
+    <label for="thresh">conf &ge;</label>
+    <input id="thresh" type="text" inputmode="decimal" value="0.20" size="5">
+    <button class="badge" id="applyThresh">apply</button>
+    <button class="badge approve" id="approve"
+            title="copy every shown sam3 box into your annotations">approve</button>
+  </span>
+  <button class="badge" id="flag">not signed off</button>
+</header>
+
+<div class="viewport" id="viewport">
+  <div class="stage" id="stage">
+    <img id="photo" alt="">
+    <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
+  </div>
+  <div class="hint">
+    <b>a</b> / <b>d</b> previous, next &nbsp; <b>f</b> sign off &nbsp;
+    wheel to zoom &nbsp; <b>0</b> to fit &nbsp; middle-drag to pan<br>
+    drag empty space to draw &nbsp; drag a box to move &nbsp;
+    drag a corner to resize<br>
+    <b>enter</b> approves the selected sam3 box &nbsp;
+    <b>del</b> removes yours, hides a sam3 one<br>
+    <b>e</b> switches between annotating and picking exemplars<br>
+    <span style="color:#a855f7">violet</span> yours &nbsp;
+    <span style="color:#ff2d2d">red</span> sam3 &nbsp;
+    <span style="color:#5cc8ff">blue dots</span> sam3 approved &nbsp;
+    <span style="color:#ffb01f">amber</span> exemplar
+  </div>
+</div>
+
+<footer><canvas id="ribbon"></canvas></footer>
+
+<script>
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/** Every request below is made relative to the directory this page was served
+    from. Served straight off the node that is "/", so nothing changes; served
+    behind the Open OnDemand proxy it is "/node/<host>/<port>/", where an
+    absolute "/api/..." would resolve against the dashboard root and 404.
+    Derived from location rather than hardcoded, so one file works in both. */
+const BASE = window.location.pathname.replace(/[^/]*$/, "");
+
+const HANDLE_PX = 9;       // screen px: corner grab radius, and handle size
+const MIN_BOX = 3;         // image px: a drag that ends smaller than this reverts
+const ACCEPTED_IOU = 0.5;  // prediction vs. existing sam3_* annotation: see load()
+const EXEMPLAR_IOU = 0.9;  // exemplar vs. the annotation it created: near-identical only
+
+// Must match WRITABLE_PROVENANCE in annotator.py. The server rejects the PUT
+// outright if anything else turns up, so these are not decorative.
+const PROV_HUMAN = "human";
+const PROV_SAM3_ASIS = "sam3_asis";
+const PROV_SAM3_ADJUSTED = "sam3_adjusted";
+
+/** The two dropdowns. `project` decides where annotations and flags are read
+    and written; `run` decides which predictions and which exemplar manifest
+    are shown. They ride on every request rather than living on the server, so
+    two tabs can sit on two different datasets at once. */
+let project = null;
+let run = null;
+let projects = [];        // [{name, runs: [{name, modified, predictions}], images}]
+let defaultProject = "";  // paths.dataset from the YAML
+
+/** localStorage keys.
+
+    Prefixed because Open OnDemand proxies every app through one origin, so an
+    unprefixed "project" key shares a namespace with the dashboard and with
+    anything else ever run on a node.
+
+    One key per project rather than one blob: two tabs on two datasets write
+    independently, where a blob would need read-modify-write and would lose the
+    other tab's choice. */
+const K_PROJECT = "al.project";
+const K_RUN = (p) => "al.run." + p;
+
+/** Sentinel for the "+ New run" entry. Contains a NUL, which _safe_name on the
+    server rejects, so it can never collide with a real run name. */
+const NEW_RUN = "\u0000new";
+
+/** Append the current selection to a path. Every api call goes through this. */
+const q = (path, extra) => {
+  const u = new URLSearchParams();
+  if (project) u.set("project", project);
+  if (run) u.set("run", run);
+  for (const k in (extra || {})) u.set(k, extra[k]);
+  return BASE + path + "?" + u.toString();
+};
+
+let images = [];        // [{name, boxes, complete}]
+let idx = 0;
+let boxes = [];         // human-owned, editable, PUT back to ANNOTATION_DIR
+let preds = [];         // sam3, read only; edits here live until you approve
+let threshold = 0.20;   // applied to preds only; a view filter, not a rerun
+let complete = false;
+let natW = 0, natH = 0;
+let exems = [];         // this image's picked exemplars, mirrored from the manifest
+let exemSet = null;     // {name, count} for the whole set, kept in step locally
+let mode = "annotate";  // or "exemplar": what a freshly drawn box becomes
+let sel = null;         // {kind: "box" | "pred" | "exem", i} or null
+let dirty = false;
+let saveTimer = null;
+
+const el = {
+  name: document.getElementById("name"),
+  counter: document.getElementById("counter"),
+  boxcount: document.getElementById("boxcount"),
+  predcount: document.getElementById("predcount"),
+  thresh: document.getElementById("thresh"),
+  applyThresh: document.getElementById("applyThresh"),
+  exemcount: document.getElementById("exemcount"),
+  mode: document.getElementById("mode"),
+  approve: document.getElementById("approve"),
+  flag: document.getElementById("flag"),
+  viewport: document.getElementById("viewport"),
+  stage: document.getElementById("stage"),
+  photo: document.getElementById("photo"),
+  svg: document.getElementById("svg"),
+  ribbon: document.getElementById("ribbon"),
+  projectSel: document.getElementById("projectSel"),
+  runSel: document.getElementById("runSel"),
+  delRun: document.getElementById("delRun"),
+};
+
+// ---------------------------------------------------------------- view
+
+let fit = 1, zoom = 1, panX = 0, panY = 0;
+
+const scale = () => fit * zoom;
+
+function applyTransform() {
+  el.stage.style.transform = `translate(${panX}px, ${panY}px) scale(${scale()})`;
+}
+
+function fitToViewport() {
+  const vw = el.viewport.clientWidth, vh = el.viewport.clientHeight;
+  fit = Math.min(vw / natW, vh / natH);
+  zoom = 1;
+  panX = (vw - natW * fit) / 2;
+  panY = (vh - natH * fit) / 2;
+  applyTransform();
+  render();   // handles are sized in image units, so they depend on the scale
+}
+
+el.viewport.addEventListener("wheel", (e) => {
+  if (!natW) return;
+  e.preventDefault();
+  const before = scale();
+  zoom = Math.min(20, Math.max(1, zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18)));
+  const after = scale();
+  const r = el.viewport.getBoundingClientRect();
+  const cx = e.clientX - r.left, cy = e.clientY - r.top;
+  panX = cx - (cx - panX) * (after / before);
+  panY = cy - (cy - panY) * (after / before);
+  applyTransform();
+  render();
+}, { passive: false });
+
+let panning = null;
+el.viewport.addEventListener("mousedown", (e) => {
+  if (e.button !== 1) return;
+  e.preventDefault();
+  panning = { x: e.clientX - panX, y: e.clientY - panY };
+  el.viewport.classList.add("panning");
+});
+window.addEventListener("mousemove", (e) => {
+  if (!panning) return;
+  panX = e.clientX - panning.x;
+  panY = e.clientY - panning.y;
+  applyTransform();
+});
+window.addEventListener("mouseup", () => {
+  panning = null;
+  el.viewport.classList.remove("panning");
+});
+
+// ---------------------------------------------------------------- geometry
+
+const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+
+function normalise(b) {
+  const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
+  const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
+  b.x1 = x1; b.x2 = x2; b.y1 = y1; b.y2 = y2;
+  return b;
+}
+
+function iou(a, b) {
+  const w = Math.min(a.x2, b.x2) - Math.max(a.x1, b.x1);
+  const h = Math.min(a.y2, b.y2) - Math.max(a.y1, b.y1);
+  if (w <= 0 || h <= 0) return 0;
+  const inter = w * h;
+  const union = (a.x2 - a.x1) * (a.y2 - a.y1)
+              + (b.x2 - b.x1) * (b.y2 - b.y1) - inter;
+  return union > 0 ? inter / union : 0;
+}
+
+const listOf = (kind) =>
+  kind === "pred" ? preds : kind === "exem" ? exems : boxes;
+const at = (s) => (s ? listOf(s.kind)[s.i] : null);
+const isSel = (kind, i) => !!sel && sel.kind === kind && sel.i === i;
+const shownPreds = () => preds.filter((b) => b.score >= threshold);
+const fromSam3 = (b) => b.provenance !== PROV_HUMAN;
+
+function classOf(kind, b) {
+  if (kind === "pred") return "pred";
+  if (kind === "exem") return "exem";
+  return fromSam3(b) ? "accept" : "human";
+}
+
+/** An exemplar has a twin in `boxes` - picking one writes an annotation too -
+    so the twin is not drawn. The threshold is tight because the two are the
+    same rectangle; a merely overlapping neighbour must stay visible. */
+const twinOfExemplar = (b) => exems.some((e) => iou(e, b) >= EXEMPLAR_IOU);
+
+// ---------------------------------------------------------------- hit testing
+
+function toImage(e) {
+  const p = el.svg.createSVGPoint();
+  p.x = e.clientX; p.y = e.clientY;
+  const m = el.svg.getScreenCTM();
+  return m ? p.matrixTransform(m.inverse()) : { x: 0, y: 0 };
+}
+
+/** Every grabbable box, topmost first: yours over sam3, later over earlier. */
+function candidates() {
+  const out = [];
+  for (let i = exems.length - 1; i >= 0; i--) out.push({ kind: "exem", i, b: exems[i] });
+  for (let i = boxes.length - 1; i >= 0; i--) {
+    if (twinOfExemplar(boxes[i])) continue;
+    out.push({ kind: "box", i, b: boxes[i] });
+  }
+  for (let i = preds.length - 1; i >= 0; i--) {
+    if (preds[i].score >= threshold) out.push({ kind: "pred", i, b: preds[i] });
+  }
+  return out;
+}
+
+function cornerAt(b, p, grab) {
+  const west  = Math.abs(p.x - b.x1) <= grab;
+  const east  = Math.abs(p.x - b.x2) <= grab;
+  const north = Math.abs(p.y - b.y1) <= grab;
+  const south = Math.abs(p.y - b.y2) <= grab;
+  if (north && west) return "nw";
+  if (north && east) return "ne";
+  if (south && west) return "sw";
+  if (south && east) return "se";
+  return null;
+}
+
+/** Corners beat interiors everywhere, or a corner inside another box would be
+    unreachable. The grab radius is in screen px, so it does not shrink as you
+    zoom in to place an edge precisely. */
+function hitTest(p) {
+  const grab = HANDLE_PX / scale();
+  const list = candidates();
+  for (const c of list) {
+    // Exemplars have no corners: the manifest is a picked set, not a canvas.
+    // Wrong shape? del it, fix the annotation, pick it again.
+    if (c.kind === "exem") continue;
+    const mode = cornerAt(normalise(c.b), p, grab);
+    if (mode) return { kind: c.kind, i: c.i, mode };
+  }
+  for (const c of list) {
+    const b = c.b;
+    if (p.x >= b.x1 && p.x <= b.x2 && p.y >= b.y1 && p.y <= b.y2) {
+      return { kind: c.kind, i: c.i, mode: c.kind === "exem" ? "pick" : "move" };
+    }
+  }
+  return null;
+}
+
+const CURSOR = {
+  move: "move", pick: "pointer",
+  nw: "nwse-resize", se: "nwse-resize",
+  ne: "nesw-resize", sw: "nesw-resize",
+};
+
+// ---------------------------------------------------------------- drag & draw
+
+let draft = null;   // a new box being dragged out
+let drag = null;    // an existing box being moved or resized
+
+el.svg.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  const p = toImage(e);
+  const hit = hitTest(p);
+  if (hit) {
+    sel = { kind: hit.kind, i: hit.i };
+    if (hit.mode !== "pick") {
+      const b = at(sel);
+      drag = {
+        kind: hit.kind, i: hit.i, mode: hit.mode, p0: p,
+        start: { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 },
+      };
+    }
+    render();
+    return;
+  }
+  draft = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+  sel = null;
+  render();
+});
+
+el.svg.addEventListener("mousemove", (e) => {
+  if (drag || draft || panning) return;
+  const hit = hitTest(toImage(e));
+  el.svg.style.cursor = hit ? CURSOR[hit.mode] : "crosshair";
+});
+
+// On window, not on the svg: a drag that leaves the image should keep tracking.
+window.addEventListener("mousemove", (e) => {
+  if (drag) { dragTo(toImage(e)); return; }
+  if (draft) {
+    const p = toImage(e);
+    draft.x1 = p.x; draft.y1 = p.y;
+    render();
+  }
+});
+
+function dragTo(p) {
+  const b = at(drag);
+  if (!b) { drag = null; return; }
+  const s = drag.start;
+  const dx = p.x - drag.p0.x, dy = p.y - drag.p0.y;
+  if (drag.mode === "move") {
+    const w = s.x2 - s.x1, h = s.y2 - s.y1;
+    const x = clamp(s.x1 + dx, 0, natW - w);
+    const y = clamp(s.y1 + dy, 0, natH - h);
+    b.x1 = x; b.y1 = y; b.x2 = x + w; b.y2 = y + h;
+  } else {
+    const west = drag.mode[1] === "w", north = drag.mode[0] === "n";
+    b.x1 = west  ? clamp(s.x1 + dx, 0, natW) : s.x1;
+    b.x2 = west  ? s.x2 : clamp(s.x2 + dx, 0, natW);
+    b.y1 = north ? clamp(s.y1 + dy, 0, natH) : s.y1;
+    b.y2 = north ? s.y2 : clamp(s.y2 + dy, 0, natH);
+  }
+  render();
+}
+
+function endDrag() {
+  const b = at(drag), s = drag.start;
+  if (b) {
+    normalise(b);
+    if (b.x2 - b.x1 < MIN_BOX || b.y2 - b.y1 < MIN_BOX) Object.assign(b, s);
+    const changed = ["x1", "y1", "x2", "y2"].some((k) => Math.abs(b[k] - s[k]) > 0.5);
+    if (changed) {
+      if (drag.kind === "pred") {
+        // Nothing is written: this only decides which token the box gets if
+        // and when it is approved.
+        b.edited = true;
+      } else {
+        // An already-approved box that gets nudged is no longer "as is".
+        if (b.provenance === PROV_SAM3_ASIS) b.provenance = PROV_SAM3_ADJUSTED;
+        touch();
+      }
+    }
+  }
+  drag = null;
+  render();
+}
+
+/** A drawn box always becomes a human annotation. In exemplar mode it is also
+    appended to the manifest - and that write goes first, because it is the one
+    that can be refused. If the server says no, nothing has been created
+    anywhere and the drag simply evaporates. */
+async function endDraft() {
+  const x1 = Math.min(draft.x0, draft.x1), x2 = Math.max(draft.x0, draft.x1);
+  const y1 = Math.min(draft.y0, draft.y1), y2 = Math.max(draft.y0, draft.y1);
+  const picking = mode === "exemplar";
+  draft = null;
+  if (x2 - x1 < MIN_BOX || y2 - y1 < MIN_BOX) { render(); return; }
+
+  const box = {
+    x1: clamp(x1, 0, natW), y1: clamp(y1, 0, natH),
+    x2: clamp(x2, 0, natW), y2: clamp(y2, 0, natH),
+  };
+  if (picking) {
+    render();                       // clear the draft while the POST is in flight
+    const id = await postExemplar(box);
+    if (id === null) return;
+    exems.push({ id, ...box });
+    sel = { kind: "exem", i: exems.length - 1 };
+  }
+  boxes.push({ ...box, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
+  if (!picking) sel = { kind: "box", i: boxes.length - 1 };
+  touch();
+  render();
+}
+
+window.addEventListener("mouseup", () => {
+  if (drag) { endDrag(); return; }
+  if (draft) endDraft();
+});
+
+// ---------------------------------------------------------------- approving
+
+/** Move one prediction into the annotation list.
+
+    The geometry is copied verbatim - whatever is on screen, adjusted or not -
+    and the score keeps SAM3's confidence rather than becoming 1.0, so the
+    annotation file records at which confidence a human was willing to sign
+    off. The prediction leaves `preds` so it cannot be approved twice; the file
+    in PREDICTION_DIR is untouched. */
+function approve(i) {
+  const p = preds[i];
+  if (!p) return;
+  boxes.push({
+    x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+    provenance: p.edited ? PROV_SAM3_ADJUSTED : PROV_SAM3_ASIS,
+    quality: "verified",
+    score: p.score,
+  });
+  preds.splice(i, 1);
+}
+
+function approveSelected() {
+  if (!sel || sel.kind !== "pred") return;
+  approve(sel.i);
+  sel = null;
+  touch();
+  render();
+}
+
+/** Everything currently above the threshold. Predictions you hid with del are
+    already gone from `preds`, so the threshold plus your deletions are exactly
+    what this approves. */
+function approveShown() {
+  let n = 0;
+  for (let i = preds.length - 1; i >= 0; i--) {
+    if (preds[i].score >= threshold) { approve(i); n++; }
+  }
+  if (!n) return;
+  sel = null;
+  touch();
+  render();
+}
+
+el.approve.addEventListener("click", approveShown);
+
+// ---------------------------------------------------------------- exemplars
+
+function showSet() {
+  if (!exemSet) { el.exemcount.textContent = ""; return; }
+  el.exemcount.textContent = `${exemSet.count} in ${exemSet.name}`;
+}
+
+async function postExemplar(box) {
+  try {
+    const r = await fetch(q(`api/exemplar/${encodeURIComponent(images[idx].name)}`), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(box),
+    });
+    const body = await r.json();
+    if (!r.ok) {
+      status(`exemplar refused: ${body.detail || r.status}`, true);
+      return null;
+    }
+    exemSet = { name: body.set, count: body.count };
+    showSet();
+    return body.id;
+  } catch (err) {
+    status(`exemplar not saved: ${err.message}`, true);
+    return null;
+  }
+}
+
+/** Un-pick. The annotation it created stays behind and reappears in violet -
+    it is still a plant somebody verified, it just no longer prompts the run. */
+async function dropExemplar(i) {
+  const e = exems[i];
+  try {
+    const r = await fetch(q(`api/exemplar/${e.id}`), { method: "DELETE" });
+    if (!r.ok) { status(`exemplar ${e.id} not removed (${r.status})`, true); return; }
+    const body = await r.json();
+    exemSet = { name: body.set, count: body.count };
+    showSet();
+  } catch (err) {
+    status(`exemplar ${e.id} not removed: ${err.message}`, true);
+    return;
+  }
+  exems.splice(i, 1);
+  sel = null;
+  render();
+}
+
+function setMode(next) {
+  mode = next;
+  el.mode.textContent = mode === "exemplar" ? "picking exemplars" : "annotating";
+  el.mode.classList.toggle("mode-on", mode === "exemplar");
+  el.viewport.classList.toggle("exemplar", mode === "exemplar");
+}
+
+el.mode.addEventListener("click", () =>
+  setMode(mode === "exemplar" ? "annotate" : "exemplar"));
+
+// ---------------------------------------------------------------- render
+
+function rect(b, cls) {
+  const r = document.createElementNS(SVG_NS, "rect");
+  r.setAttribute("x", Math.min(b.x1, b.x2));
+  r.setAttribute("y", Math.min(b.y1, b.y2));
+  r.setAttribute("width", Math.abs(b.x2 - b.x1));
+  r.setAttribute("height", Math.abs(b.y2 - b.y1));
+  r.setAttribute("class", cls);
+  return r;
+}
+
+/** Corner squares on the selected box: sized in image units from a screen-px
+    constant, so they stay the same size on screen at any zoom. */
+function handles(b, base) {
+  const s = HANDLE_PX / scale();
+  for (const [x, y] of [[b.x1, b.y1], [b.x2, b.y1], [b.x1, b.y2], [b.x2, b.y2]]) {
+    const r = document.createElementNS(SVG_NS, "rect");
+    r.setAttribute("x", x - s / 2);
+    r.setAttribute("y", y - s / 2);
+    r.setAttribute("width", s);
+    r.setAttribute("height", s);
+    r.setAttribute("class", `handle ${base}`);
+    el.svg.appendChild(r);
+  }
+}
+
+function render() {
+  while (el.svg.firstChild) el.svg.removeChild(el.svg.firstChild);
+
+  // Predictions first, so approved and hand-drawn boxes draw on top of them.
+  let shown = 0;
+  preds.forEach((b, i) => {
+    if (b.score < threshold) return;
+    shown++;
+    el.svg.appendChild(rect(b, isSel("pred", i) ? "pred sel" : "pred"));
+  });
+  boxes.forEach((b, i) => {
+    if (twinOfExemplar(b)) return;
+    const base = classOf("box", b);
+    el.svg.appendChild(rect(b, isSel("box", i) ? `${base} sel` : base));
+  });
+  exems.forEach((b, i) => {
+    el.svg.appendChild(rect(b, isSel("exem", i) ? "exem sel" : "exem"));
+  });
+  if (draft) {
+    el.svg.appendChild(rect(
+      { x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 },
+      mode === "exemplar" ? "draft exem" : "draft"));
+  }
+  // No handles on an exemplar: it cannot be dragged, and offering a grip that
+  // does nothing is worse than offering none.
+  const active = at(sel);
+  if (active && sel.kind !== "exem") handles(active, classOf(sel.kind, active));
+
+  const derived = boxes.filter(fromSam3).length;
+  el.boxcount.textContent =
+    `${boxes.length} ${boxes.length === 1 ? "box" : "boxes"}`
+    + (derived ? ` (${derived} sam3)` : "");
+  el.predcount.textContent = preds.length ? `${shown}/${preds.length} sam3` : "";
+  el.approve.textContent = shown ? `approve ${shown}` : "approve";
+  el.approve.disabled = shown === 0;
+  el.flag.textContent = complete ? "signed off" : "not signed off";
+  el.flag.classList.toggle("on", complete);
+}
+
+// ---------------------------------------------------------------- ribbon
+
+function drawRibbon() {
+  const c = el.ribbon;
+  const w = c.clientWidth, h = 26, dpr = window.devicePixelRatio || 1;
+  c.width = w * dpr; c.height = h * dpr;
+  const g = c.getContext("2d");
+  g.scale(dpr, dpr);
+  g.clearRect(0, 0, w, h);
+  const n = images.length;
+  const step = w / n;
+  for (let i = 0; i < n; i++) {
+    const im = images[i];
+    g.fillStyle = im.complete ? "#4bd6a4" : (im.boxes > 0 ? "#8a7fd4" : "#2b323b");
+    g.fillRect(i * step, 7, Math.max(step, 1), 12);
+  }
+  g.fillStyle = "#ff2d78";
+  g.fillRect(Math.max(0, idx * step - 1), 2, Math.max(step, 2) + 2, 22);
+}
+
+el.ribbon.addEventListener("click", (e) => {
+  const r = el.ribbon.getBoundingClientRect();
+  go(Math.floor(((e.clientX - r.left) / r.width) * images.length));
+});
+
+// ---------------------------------------------------------------- io
+
+function touch() {
+  dirty = true;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 400);
+}
+
+/** Returns false if the annotation file was not written, so the caller can
+    refuse to navigate away from work that only exists in this tab. */
+async function save() {
+  if (!dirty) return true;
+  const name = images[idx].name;
+  clearTimeout(saveTimer);
+  dirty = false;
+  let r;
+  try {
+    r = await fetch(q(`api/annotation/${encodeURIComponent(name)}`), {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ boxes, complete }),
+    });
+  } catch (err) {
+    dirty = true;
+    status(`${name} not saved: ${err.message}`, true);
+    return false;
+  }
+  if (!r.ok) {
+    dirty = true;
+    status(`${name} rejected by the server (${r.status}); nothing written`, true);
+    return false;
+  }
+  images[idx].boxes = boxes.length;
+  images[idx].complete = complete;
+  drawRibbon();
+  return true;
+}
+
+async function load(i) {
+  idx = i;
+  const name = images[idx].name;
+  const data = await (await fetch(q(`api/annotation/${encodeURIComponent(name)}`))).json();
+  natW = data.width; natH = data.height;
+  boxes = data.boxes.map(normalise);
+
+  // A prediction that has already been approved is still sitting in
+  // PREDICTION_DIR, which is read only - so recognise it by overlap with an
+  // existing sam3_* annotation and drop it, rather than drawing the same
+  // object twice in two colours.
+  const approved = boxes.filter(fromSam3);
+  preds = (data.predictions || [])
+    .map(normalise)
+    .filter((p) => !approved.some((b) => iou(p, b) >= ACCEPTED_IOU));
+
+  exems = (data.exemplars || []).map(normalise);
+  complete = data.complete;
+  sel = null;
+  draft = null;
+  drag = null;
+
+  el.stage.style.width = natW + "px";
+  el.stage.style.height = natH + "px";
+  el.svg.setAttribute("viewBox", `0 0 ${natW} ${natH}`);
+  el.photo.src = q(`api/image/${encodeURIComponent(name)}`);
+
+  status(name);
+  el.counter.textContent = `${idx + 1} / ${images.length}`;
+  fitToViewport();
+  drawRibbon();
+
+  const next = images[idx + 1];
+  if (next) new Image().src = q(`api/image/${encodeURIComponent(next.name)}`);
+}
+
+async function go(i) {
+  if (i < 0 || i >= images.length || i === idx) return;
+  if (!await save()) return;   // keep the failure on screen
+  load(i);
+}
+
+// ---------------------------------------------------------------- keys
+
+window.addEventListener("keydown", (e) => {
+  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  switch (e.key) {
+    case "a": go(idx - 1); break;
+    case "d": go(idx + 1); break;
+    case "f":
+      complete = !complete; touch(); render();
+      break;
+    case "e":
+      setMode(mode === "exemplar" ? "annotate" : "exemplar"); break;
+    case "Enter":
+      approveSelected(); break;
+    case "Delete":
+    case "Backspace":
+      if (!sel) break;
+      if (sel.kind === "exem") {
+        dropExemplar(sel.i);
+      } else if (sel.kind === "pred") {
+        // Hides it for this visit only. Rejections are not persisted; what is
+        // persisted is the set of boxes you approved.
+        preds.splice(sel.i, 1);
+        sel = null;
+        render();
+      } else {
+        boxes.splice(sel.i, 1);
+        sel = null;
+        touch();
+        render();
+      }
+      break;
+    case "Escape":
+      sel = null; render(); break;
+    case "0":
+      fitToViewport(); break;
+  }
+});
+
+// ---------------------------------------------------------------- threshold
+
+function markPending() {
+  const parsed = parseFloat(el.thresh.value);
+  const valid = Number.isFinite(parsed) && parsed >= 0 && parsed <= 1;
+  el.thresh.classList.toggle("bad", !valid);
+  el.applyThresh.classList.toggle("pending", valid && parsed !== threshold);
+}
+
+function applyThreshold() {
+  const parsed = parseFloat(el.thresh.value);
+  if (!Number.isFinite(parsed) || parsed < 0 || parsed > 1) {
+    el.thresh.classList.add("bad");
+    return;
+  }
+  threshold = parsed;
+  el.thresh.value = parsed.toFixed(2);
+  el.thresh.classList.remove("bad");
+  el.applyThresh.classList.remove("pending");
+  if (sel && sel.kind === "pred" && preds[sel.i].score < threshold) sel = null;
+  render();
+}
+
+el.applyThresh.addEventListener("click", applyThreshold);
+el.thresh.addEventListener("input", markPending);
+el.thresh.addEventListener("keydown", (e) => {
+  // Enter applies. stopPropagation keeps a/d/f/0 from navigating while typing.
+  if (e.key === "Enter") { e.preventDefault(); applyThreshold(); }
+  e.stopPropagation();
+});
+
+el.flag.addEventListener("click", () => { complete = !complete; touch(); render(); });
+window.addEventListener("resize", () => { if (natW) fitToViewport(); drawRibbon(); });
+window.addEventListener("beforeunload", (e) => {
+  if (!dirty) return;
+  save();
+  e.preventDefault();
+  e.returnValue = "";
+});
+
+function status(msg, bad) {
+  el.name.textContent = msg;
+  el.name.style.color = bad ? "#ff6b6b" : "";
+  el.name.style.maxWidth = bad ? "80vw" : "40vw";
+}
+
+window.addEventListener("error", (e) => status("script error: " + e.message, true));
+el.photo.addEventListener("error", () => status("image failed to load", true));
+
+/** Fetch the project list without touching the current selection.
+    Called on boot and again after a run is created. */
+async function fetchProjects() {
+  const r = await fetch(BASE + "api/projects");
+  if (!r.ok) throw new Error(`api/projects returned ${r.status}`);
+  const data = await r.json();
+  projects = data.projects;
+  defaultProject = data.default_project || "";
+  if (!projects.length) throw new Error(`no projects under ${data.root}`);
+  return data;
+}
+
+/** Adopt the single-key layout this replaced, once, so upgrading does not
+    dump you back on the default dataset. A stored "" meant "no run", which is
+    no longer a choice, so it is dropped rather than carried over. */
+function migrateStorage() {
+  const oldProject = localStorage.getItem("project");
+  const oldRun = localStorage.getItem("run");
+  if (oldProject !== null) {
+    if (localStorage.getItem(K_PROJECT) === null)
+      localStorage.setItem(K_PROJECT, oldProject);
+    localStorage.removeItem("project");
+  }
+  if (oldRun !== null) {
+    const owner = oldProject || defaultProject;
+    if (oldRun && owner && localStorage.getItem(K_RUN(owner)) === null)
+      localStorage.setItem(K_RUN(owner), oldRun);
+    localStorage.removeItem("run");
+  }
+}
+
+/** Drop per-project keys for projects that no longer exist, so renaming a
+    folder does not leave a key behind for every rename ever made. */
+function pruneStorage() {
+  const live = new Set(projects.map((p) => p.name));
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const k = localStorage.key(i);
+    if (k && k.startsWith("al.run.") && !live.has(k.slice("al.run.".length)))
+      localStorage.removeItem(k);
+  }
+}
+
+/** Fill the project dropdown and pick a starting dataset.
+
+    A previous choice wins over the YAML's: coming back to the dataset you were
+    labelling matters more than what SAM 3 is currently pointed at. Anything
+    stale is ignored rather than trusted - folders get renamed. */
+async function loadProjects() {
+  const data = await fetchProjects();
+  migrateStorage();
+  pruneStorage();
+
+  const known = (name) => projects.some((p) => p.name === name);
+  const stored = localStorage.getItem(K_PROJECT);
+  project = known(stored) ? stored
+          : known(defaultProject) ? defaultProject
+          : projects[0].name;
+  localStorage.setItem(K_PROJECT, project);
+
+  el.projectSel.innerHTML = "";
+  for (const p of projects) {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = `${p.name} (${p.images})`;
+    el.projectSel.appendChild(o);
+  }
+  el.projectSel.value = project;
+  fillRuns();
+}
+
+/** Fill the run dropdown for the current project and resolve the selection.
+
+    Every entry is a run that exists on disk. The YAML's run.name is not
+    consulted: it says where the next batch job writes, which is unrelated to
+    what you are looking at now.
+
+    There is no "(no run)" entry: whether predictions are SHOWN is a view
+    question, while which run is selected decides where exemplars are written -
+    two different things that should not share one control. A project with no
+    runs still leaves `run` null, because annotating needs no run at all;
+    that is an empty state, not something the user picked. */
+function fillRuns() {
+  const p = projects.find((x) => x.name === project);
+  const runs = p ? p.runs : [];              // already newest-first
+  const existing = runs.map((r) => r.name);
+
+  el.runSel.innerHTML = "";
+  for (const r of runs) {
+    const o = document.createElement("option");
+    o.value = r.name;
+    o.textContent = r.predictions
+      ? `${r.name} \u2014 ${r.predictions} predictions`
+      : `${r.name} \u2014 no predictions yet`;
+    el.runSel.appendChild(o);
+  }
+  if (!existing.length) {
+    const o = document.createElement("option");
+    o.value = "";
+    o.textContent = "(no runs yet)";
+    o.disabled = true;
+    el.runSel.appendChild(o);
+  }
+  const mk = document.createElement("option");
+  mk.value = NEW_RUN;
+  mk.textContent = "\uFF0B New run\u2026";
+  el.runSel.appendChild(mk);
+
+  // Only runs that exist on disk are selectable. A run the batch job has not
+  // created yet is made here, with + New run, not offered speculatively.
+  const stored = localStorage.getItem(K_RUN(project));
+  run = existing.includes(stored) ? stored
+      : existing.length ? existing[0]         // most recently modified
+      : null;
+  el.runSel.value = run || "";
+  el.delRun.disabled = !run;                  // empty state has nothing to delete
+  if (run) localStorage.setItem(K_RUN(project), run);
+  else localStorage.removeItem(K_RUN(project));
+}
+
+/** Name and create a run, then select it.
+
+    Validated client-side with the same rule the server enforces, so an obvious
+    mistake does not cost a round trip - but the server check is the real one. */
+async function createRun() {
+  const restore = () => { el.runSel.value = run || ""; };
+  const name = (window.prompt("Name for the new run:") || "").trim();
+  if (!name) return restore();
+  if (name === "." || name === ".." || /[/\\\u0000]/.test(name)) {
+    status("invalid run name: no / or \\", true);
+    return restore();
+  }
+  if (!(await flush())) return restore();
+
+  let created;
+  try {
+    const r = await fetch(
+      BASE + "api/run?" + new URLSearchParams({ project, run: name }),
+      { method: "POST" });
+    if (!r.ok) {
+      const detail = await r.text();
+      status(`could not create run: ${r.status} ${detail}`, true);
+      return restore();
+    }
+    created = await r.json();
+  } catch (err) {
+    status("could not create run: " + err.message, true);
+    return restore();
+  }
+
+  localStorage.setItem(K_RUN(project), created.run);
+  await fetchProjects();      // the new run has to appear in the list
+  fillRuns();
+  await loadDataset();
+}
+
+/** Load the image list and exemplar set for the current selection.
+
+    Called on boot and on every dropdown change. Everything per-image is reset
+    first: an index into the old project's list means nothing in the new one. */
+async function loadDataset() {
+  images = [];
+  boxes = []; preds = []; exems = []; exemSet = null;
+  sel = null; dirty = false; idx = 0;
+  clearTimeout(saveTimer);
+  status("scanning image folder\u2026");
+
+  try {
+    const r = await fetch(q("api/images"));
+    if (!r.ok) throw new Error(`api/images returned ${r.status}`);
+    images = await r.json();
+  } catch (err) {
+    status("cannot reach the server: " + err.message, true);
+    return;
+  }
+  if (!images.length) { status(`no images in ${project}/images`, true); return; }
+
+  try {
+    const r = await fetch(q("api/exemplars"));
+    if (r.ok) { exemSet = await r.json(); showSet(); }
+  } catch (err) {
+    // Not fatal: annotating works without ever touching the manifest.
+    console.warn("exemplar set unavailable:", err.message);
+  }
+  load(0);
+}
+
+/** Delete the selected run and everything in it.
+
+    The prompt is scaled to what is actually at risk. Predictions, overlays and
+    composites are regenerable - a confirm is enough. Picked exemplars are hand
+    work that no rerun brings back, so a set with picks in it makes you type the
+    run name. Annotations and flags are project-scoped and cannot be touched
+    from here at all, which the message says explicitly so nobody has to guess. */
+async function deleteRun() {
+  if (!run) return;
+  const name = run;
+
+  const meta = (projects.find((x) => x.name === project) || { runs: [] })
+    .runs.find((r) => r.name === name);
+  let picked = 0;
+  try {
+    const r = await fetch(q("api/exemplars"));
+    if (r.ok) picked = (await r.json()).count || 0;
+  } catch (err) {
+    // Advisory only: a manifest we cannot read still deserves the strict path.
+    picked = -1;
+  }
+
+  const what = `run "${name}"\n\n`
+    + `${meta ? meta.predictions : 0} prediction file(s)\n`
+    + `${picked < 0 ? "an unreadable" : picked} exemplar manifest entr`
+    + `${picked === 1 ? "y" : "ies"}\n\n`
+    + `Annotations and flags are NOT affected.`;
+
+  if (picked !== 0) {
+    const typed = window.prompt(
+      `This permanently deletes ${what}\n\nType the run name to confirm:`);
+    if ((typed || "").trim() !== name) { status("delete cancelled"); return; }
+  } else if (!window.confirm(`Permanently delete ${what}`)) {
+    return;
+  }
+
+  try {
+    const r = await fetch(
+      BASE + "api/run?" + new URLSearchParams(
+        { project, run: name, confirm: name }),
+      { method: "DELETE" });
+    if (!r.ok) {
+      status(`could not delete run: ${r.status} ${await r.text()}`, true);
+      return;
+    }
+    const done = await r.json();
+    status(`deleted ${name} (${done.files} files)`);
+  } catch (err) {
+    status("could not delete run: " + err.message, true);
+    return;
+  }
+
+  // Forget the selection before refilling, or the fallback would try to
+  // reselect a run that no longer exists.
+  localStorage.removeItem(K_RUN(project));
+  await fetchProjects();
+  fillRuns();
+  await loadDataset();
+}
+
+/** Save before tearing anything down; a failed save aborts the switch. */
+async function flush() {
+  if (!dirty) return true;
+  try { await save(); return true; }
+  catch (err) {
+    status("not switching - save failed: " + err.message, true);
+    return false;
+  }
+}
+
+async function switchProject(next) {
+  if (!(await flush())) { el.projectSel.value = project; return; }
+  project = next;
+  localStorage.setItem(K_PROJECT, project);
+  fillRuns();                 // runs belong to the project, so this reruns
+  await loadDataset();
+}
+
+async function switchRun(next) {
+  if (next === NEW_RUN) return createRun();
+  if (!(await flush())) { el.runSel.value = run || ""; return; }
+  run = next || null;
+  if (run) localStorage.setItem(K_RUN(project), run);
+  else localStorage.removeItem(K_RUN(project));
+  await loadDataset();
+}
+
+el.projectSel.addEventListener("change", () => switchProject(el.projectSel.value));
+el.runSel.addEventListener("change", () => switchRun(el.runSel.value));
+el.delRun.addEventListener("click", deleteRun);
+
+(async function main() {
+  const t0 = parseFloat(el.thresh.value);
+  if (Number.isFinite(t0)) threshold = t0;
+  try {
+    await loadProjects();
+  } catch (err) {
+    status("cannot list projects: " + err.message, true);
+    return;
+  }
+  setMode("annotate");
+  await loadDataset();
+})();
+</script>
+</body>
+</html>
