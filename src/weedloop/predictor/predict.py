@@ -88,7 +88,7 @@ Launch (interactive, Gamarello):
 """
 
 import argparse
-from Config import load_config
+from weedloop.config import load_config
 
 import json
 import math
@@ -696,8 +696,16 @@ def main(cfg):
         }, indent=2, default=str))
 
 
-if __name__ == "__main__":
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", required=True)
+def cli() -> None:
+    ap = argparse.ArgumentParser(
+        prog="weedloop-predict",
+        description="Run SAM 3 over a project's images using pasted exemplar tiles.",
+    )
+    ap.add_argument("--config", required=True, type=Path,
+                    help="path to the YAML settings file")
     args = ap.parse_args()
     main(load_config(args.config))
+
+
+if __name__ == "__main__":
+    cli()

@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "weedloop"
+version = "0.1.0"
+description = "SAM 3-assisted annotation and prediction pipeline"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "pyyaml",
+    "pillow",
+]
+
+[project.optional-dependencies]
+annotator = ["fastapi", "uvicorn"]
+sam3 = ["numpy", "tqdm"]   # torch and sam3 itself are environment-provided
+
+[project.scripts]
+weedloop-annotate = "weedloop.annotator.app:cli"
+weedloop-predict  = "weedloop.predictor.predict:cli"
+
+[dependency-groups]
+dev = ["ruff", "mypy", "pytest", "types-PyYAML"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/weedloop"]
