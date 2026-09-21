@@ -16,6 +16,10 @@
     --exem:    #ffb01f;   /* amber      - picked as a SAM3 prompt */
     --done:    #4bd6a4;
     --pending: #4a5460;
+    --started: #8a7fd4;   /* boxes but no sign-off; same as the ribbon */
+    --todo:    #2b323b;
+    --cursor:  #ff2d78;   /* the ribbon's "you are here" */
+    --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
   html, body {
@@ -23,7 +27,14 @@
     background: var(--bg); color: var(--text);
     font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  body { display: grid; grid-template-rows: auto 1fr auto; }
+
+  /* Three screens, one page. Only one is ever visible; [hidden] has to win
+     over the per-view grid templates below, hence the !important. */
+  .view { height: 100%; display: grid; grid-template-rows: auto 1fr; min-height: 0; }
+  .view[hidden] { display: none !important; }
+  #datasetView { grid-template-rows: auto auto 1fr; }
+  #editorView  { grid-template-rows: auto 1fr auto; }
+  .scroll { overflow: auto; min-height: 0; }
 
   header {
     display: flex; align-items: center; gap: 18px;
@@ -144,16 +155,187 @@
   .badge.danger:disabled { color: var(--line); cursor: default; }
   .picker { background: var(--panel); color: inherit; border: 1px solid var(--line);
             border-radius: 4px; padding: 2px 4px; font: inherit; max-width: 22vw; }
+  #runControls { display: inline-flex; align-items: center; gap: 8px; }
+
+  /* ------------------------------------------------ navigation */
+  a { color: inherit; }
+  .wordmark { font-weight: 600; letter-spacing: .01em; }
+  .crumbs { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; min-width: 0; }
+  .crumbs a { color: var(--dim); text-decoration: none; }
+  .crumbs a:hover { color: var(--text); }
+  .crumbs .sep { color: var(--line); }
+  .crumbs .here { font-family: var(--mono); font-size: 12px;
+                  overflow: hidden; text-overflow: ellipsis; }
+  .back {
+    font-family: var(--mono); font-size: 12px; color: var(--dim);
+    text-decoration: none; white-space: nowrap; padding: 3px 8px 3px 4px;
+    border: 1px solid transparent; border-radius: 2px;
+    max-width: 18vw; overflow: hidden; text-overflow: ellipsis;
+  }
+  .back:hover { color: var(--text); border-color: var(--line); }
+  a:focus-visible, .tab:focus-visible, .field:focus-visible {
+    outline: 2px solid var(--human); outline-offset: 2px;
+  }
+
+  /* ------------------------------------------------ project cards */
+  .cards {
+    display: grid; gap: 16px; padding: 20px;
+    grid-template-columns: repeat(auto-fill, minmax(290px, 1fr));
+  }
+  .card {
+    display: grid; text-decoration: none;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    overflow: hidden;
+  }
+  .card:hover { border-color: var(--dim); }
+  .card.last { border-color: var(--cursor); }
+  .cover { aspect-ratio: 16 / 9; background: #0d0f12; }
+  .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .card .body { display: grid; gap: 9px; padding: 12px 14px 14px; }
+  .card .title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .card h2 {
+    margin: 0; font: 600 13px/1.3 var(--mono);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .card .total { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums;
+                 white-space: nowrap; }
+  .tag {
+    font-size: 11px; color: var(--dim); border: 1px solid var(--line);
+    border-radius: 2px; padding: 0 6px; white-space: nowrap;
+  }
+  .card.last .tag.last { color: var(--cursor); border-color: var(--cursor); }
+  /* The meter is the ribbon folded into one bar: same colours, same order. */
+  .meter { display: flex; height: 6px; background: var(--todo); border-radius: 1px; overflow: hidden; }
+  .meter .d { background: var(--done); }
+  .meter .p { background: var(--started); }
+  .stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 12px;
+           color: var(--dim); font-variant-numeric: tabular-nums; }
+  .stats .d b { color: var(--done); font-weight: 500; }
+  .stats .p b { color: var(--started); font-weight: 500; }
+  .stats .t b { color: var(--text); font-weight: 500; }
+  .runs { font-size: 12px; color: var(--dim); overflow: hidden;
+          text-overflow: ellipsis; white-space: nowrap; }
+  .runs code { font-family: var(--mono); font-size: 11px; color: var(--text); }
+
+  /* ------------------------------------------------ image grid */
+  .toolbar {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+    padding: 8px 14px; border-bottom: 1px solid var(--line);
+  }
+  .tabs { display: flex; gap: 2px; flex-wrap: wrap; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    background: none; color: var(--dim); font: inherit; cursor: pointer;
+    padding: 4px 10px; border: 1px solid transparent; border-radius: 2px;
+  }
+  .tab:hover { color: var(--text); }
+  .tab[aria-selected="true"] { color: var(--text); background: var(--panel); border-color: var(--line); }
+  .tab i { width: 8px; height: 8px; border-radius: 1px; background: var(--c); }
+  .tab .n { font-family: var(--mono); font-size: 11px; font-variant-numeric: tabular-nums; color: var(--dim); }
+  .field {
+    width: 220px; padding: 4px 8px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 2px; font: inherit;
+  }
+  .field:focus { outline: none; border-color: var(--human); }
+  .sizer { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
+  .sizer input { width: 90px; accent-color: var(--dim); }
+
+  .grid {
+    --cell: 190px;
+    display: grid; gap: 10px; padding: 14px;
+    grid-template-columns: repeat(auto-fill, minmax(var(--cell), 1fr));
+  }
+  .tile {
+    --c: var(--todo);
+    display: block; text-decoration: none; position: relative;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    overflow: hidden;
+  }
+  .tile.progress { --c: var(--started); }
+  .tile.done     { --c: var(--done); }
+  .tile:hover { border-color: var(--dim); }
+  .tile.last  { border-color: var(--cursor); box-shadow: 0 0 0 1px var(--cursor); }
+  .thumb { position: relative; aspect-ratio: 4 / 3; background: #0d0f12; }
+  .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile.broken .thumb img { visibility: hidden; }
+  .tile.broken .thumb::after {
+    content: "no preview"; position: absolute; inset: 0;
+    display: grid; place-items: center; color: var(--dim); font-size: 12px;
+  }
+  .tile .bar { height: 3px; background: var(--c); }
+  .tile .cap {
+    padding: 5px 8px 6px; font: 11px/1.4 var(--mono); color: var(--dim);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .tile:hover .cap { color: var(--text); }
+  .tile .idx, .tile .chip {
+    position: absolute; top: 6px; font: 11px/1.5 var(--mono); padding: 0 6px;
+    border-radius: 2px; background: rgba(13, 15, 18, .82); font-variant-numeric: tabular-nums;
+  }
+  .tile .idx  { left: 6px; color: var(--dim); }
+  .tile .chip { right: 6px; color: var(--text); border: 1px solid var(--c); }
+  .tile.done .chip { color: #0d1114; background: var(--done); }
+  .empty { color: var(--dim); padding: 40px 20px; text-align: center; }
 </style>
 </head>
 <body>
 
+<!-- ============================================================ projects -->
+<section class="view" id="projectsView" hidden>
+  <header>
+    <span class="wordmark">annotator</span>
+    <span class="counter" id="rootPath"></span>
+    <span class="spacer"></span>
+    <span class="name status"></span>
+  </header>
+  <div class="scroll">
+    <div class="cards" id="projectCards"></div>
+  </div>
+</section>
+
+<!-- ============================================================ one project -->
+<section class="view" id="datasetView" hidden>
+  <header>
+    <nav class="crumbs">
+      <a href="#/">Projects</a><span class="sep">/</span>
+      <span class="here" id="dsTitle"></span>
+    </nav>
+    <span id="dsRunSlot"></span>
+    <span class="spacer"></span>
+    <span class="name status"></span>
+  </header>
+  <div class="toolbar">
+    <div class="tabs" id="tabs" role="tablist">
+      <button class="tab" role="tab" data-f="all">All <span class="n"></span></button>
+      <button class="tab" role="tab" data-f="todo"><i style="--c: var(--pending)"></i>Not started <span class="n"></span></button>
+      <button class="tab" role="tab" data-f="progress"><i style="--c: var(--started)"></i>In progress <span class="n"></span></button>
+      <button class="tab" role="tab" data-f="done"><i style="--c: var(--done)"></i>Signed off <span class="n"></span></button>
+    </div>
+    <span class="spacer"></span>
+    <input id="search" class="field" type="search" placeholder="Filter by file name  ( / )"
+           autocomplete="off" spellcheck="false" aria-label="Filter by file name">
+    <label class="sizer">Size
+      <input id="cellSize" type="range" min="110" max="360" step="10" value="190">
+    </label>
+  </div>
+  <div class="scroll" id="gridScroll">
+    <div class="grid" id="grid"></div>
+    <p class="empty" id="gridEmpty" hidden></p>
+  </div>
+</section>
+
+<!-- ============================================================ editor -->
+<section class="view" id="editorView" hidden>
 <header>
-  <select id="projectSel" class="picker" title="dataset &mdash; drives images, annotations and flags"></select>
-  <select id="runSel" class="picker" title="run &mdash; drives predictions and exemplars"></select>
-  <button class="badge danger" id="delRun"
-          title="delete the selected run and everything in it">&#10005;</button>
-  <span class="name" id="name">&mdash;</span>
+  <a class="back" id="back" href="#/" title="back to the image grid (g)">&lsaquo; <span id="backName"></span></a>
+  <span id="edRunSlot">
+    <span id="runControls">
+      <select id="runSel" class="picker" title="run &mdash; drives predictions and exemplars"></select>
+      <button class="badge danger" id="delRun"
+              title="delete the selected run and everything in it">&#10005;</button>
+    </span>
+  </span>
+  <span class="name status" id="name">&mdash;</span>
   <span class="counter" id="counter"></span>
   <span class="counter" id="boxcount"></span>
   <span class="predcount" id="predcount"></span>
@@ -183,7 +365,8 @@
     drag a corner to resize<br>
     <b>enter</b> approves the selected sam3 box &nbsp;
     <b>del</b> removes yours, hides a sam3 one<br>
-    <b>e</b> switches between annotating and picking exemplars<br>
+    <b>e</b> switches between annotating and picking exemplars &nbsp;
+    <b>g</b> or <b>esc</b> back to the grid<br>
     <span style="color:#a855f7">violet</span> yours &nbsp;
     <span style="color:#ff2d2d">red</span> sam3 &nbsp;
     <span style="color:#5cc8ff">blue dots</span> sam3 approved &nbsp;
@@ -192,6 +375,7 @@
 </div>
 
 <footer><canvas id="ribbon"></canvas></footer>
+</section>
 
 <script>
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -214,7 +398,7 @@ const PROV_HUMAN = "human";
 const PROV_SAM3_ASIS = "sam3_asis";
 const PROV_SAM3_ADJUSTED = "sam3_adjusted";
 
-/** The two dropdowns. `project` decides where annotations and flags are read
+/** `project` decides where annotations and flags are read
     and written; `run` decides which predictions and which exemplar manifest
     are shown. They ride on every request rather than living on the server, so
     two tabs can sit on two different datasets at once. */
@@ -278,10 +462,30 @@ const el = {
   photo: document.getElementById("photo"),
   svg: document.getElementById("svg"),
   ribbon: document.getElementById("ribbon"),
-  projectSel: document.getElementById("projectSel"),
   runSel: document.getElementById("runSel"),
   delRun: document.getElementById("delRun"),
+  runControls: document.getElementById("runControls"),
+  projectsView: document.getElementById("projectsView"),
+  datasetView: document.getElementById("datasetView"),
+  editorView: document.getElementById("editorView"),
+  projectCards: document.getElementById("projectCards"),
+  rootPath: document.getElementById("rootPath"),
+  dsTitle: document.getElementById("dsTitle"),
+  dsRunSlot: document.getElementById("dsRunSlot"),
+  edRunSlot: document.getElementById("edRunSlot"),
+  back: document.getElementById("back"),
+  backName: document.getElementById("backName"),
+  tabs: document.getElementById("tabs"),
+  search: document.getElementById("search"),
+  cellSize: document.getElementById("cellSize"),
+  grid: document.getElementById("grid"),
+  gridScroll: document.getElementById("gridScroll"),
+  gridEmpty: document.getElementById("gridEmpty"),
 };
+
+/** Which screen is showing: "projects", "dataset" or "editor". The editor's
+    key bindings and resize handling only act while this is "editor". */
+let view = null;
 
 // ---------------------------------------------------------------- view
 
@@ -602,7 +806,7 @@ el.approve.addEventListener("click", approveShown);
 // ---------------------------------------------------------------- exemplars
 
 function showSet() {
-  if (!exemSet) { el.exemcount.textContent = ""; return; }
+  if (!exemSet || !exemSet.name) { el.exemcount.textContent = ""; return; }
   el.exemcount.textContent = `${exemSet.count} in ${exemSet.name}`;
 }
 
@@ -813,6 +1017,8 @@ async function load(i) {
   el.photo.src = q(`api/image/${encodeURIComponent(name)}`);
 
   status(name);
+  lastOpened = name;
+  document.title = `${name} \u2014 ${project}`;
   el.counter.textContent = `${idx + 1} / ${images.length}`;
   fitToViewport();
   drawRibbon();
@@ -824,6 +1030,9 @@ async function load(i) {
 async function go(i) {
   if (i < 0 || i >= images.length || i === idx) return;
   if (!await save()) return;   // keep the failure on screen
+  // replaceState, not a new history entry: a/d through 300 images should not
+  // take 300 presses of Back to get to the grid.
+  history.replaceState(null, "", hashFor(project, images[i].name));
   load(i);
 }
 
@@ -831,6 +1040,11 @@ async function go(i) {
 
 window.addEventListener("keydown", (e) => {
   if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
+  if (e.ctrlKey || e.metaKey || e.altKey) return;
+  if (view === "dataset" && e.key === "/") {
+    e.preventDefault(); el.search.focus(); el.search.select(); return;
+  }
+  if (view !== "editor") return;
   switch (e.key) {
     case "a": go(idx - 1); break;
     case "d": go(idx + 1); break;
@@ -860,7 +1074,11 @@ window.addEventListener("keydown", (e) => {
       }
       break;
     case "Escape":
-      sel = null; render(); break;
+      // First press deselects, second leaves - the same way out as g.
+      if (sel) { sel = null; render(); } else backToGrid();
+      break;
+    case "g":
+      backToGrid(); break;
     case "0":
       fitToViewport(); break;
   }
@@ -898,7 +1116,11 @@ el.thresh.addEventListener("keydown", (e) => {
 });
 
 el.flag.addEventListener("click", () => { complete = !complete; touch(); render(); });
-window.addEventListener("resize", () => { if (natW) fitToViewport(); drawRibbon(); });
+window.addEventListener("resize", () => {
+  if (view !== "editor") return;   // a hidden viewport measures 0 x 0
+  if (natW) fitToViewport();
+  drawRibbon();
+});
 window.addEventListener("beforeunload", (e) => {
   if (!dirty) return;
   save();
@@ -906,10 +1128,12 @@ window.addEventListener("beforeunload", (e) => {
   e.returnValue = "";
 });
 
+/** Messages go to the status slot of whichever screen is showing. */
 function status(msg, bad) {
-  el.name.textContent = msg;
-  el.name.style.color = bad ? "#ff6b6b" : "";
-  el.name.style.maxWidth = bad ? "80vw" : "40vw";
+  const node = (el[view + "View"] || el.projectsView).querySelector(".status");
+  node.textContent = msg;
+  node.style.color = bad ? "#ff6b6b" : "";
+  node.style.maxWidth = bad ? "80vw" : "40vw";
 }
 
 window.addEventListener("error", (e) => status("script error: " + e.message, true));
@@ -957,33 +1181,351 @@ function pruneStorage() {
   }
 }
 
-/** Fill the project dropdown and pick a starting dataset.
+// ---------------------------------------------------------------- routing
+//
+//   #/                      all projects
+//   #/<project>             that project's images as a grid
+//   #/<project>/<image>     the editor, on that image
+//
+// The hash is the only navigation state, so Back, reload and a pasted link
+// all land where you expect. It lives after the '#', which means BASE (derived
+// from the path) is unaffected behind the Open OnDemand proxy.
 
-    A previous choice wins over the YAML's: coming back to the dataset you were
-    labelling matters more than what SAM 3 is currently pointed at. Anything
-    stale is ignored rather than trusted - folders get renamed. */
-async function loadProjects() {
-  const data = await fetchProjects();
-  migrateStorage();
-  pruneStorage();
+const K_CELL = "al.cell";
 
-  const known = (name) => projects.some((p) => p.name === name);
-  const stored = localStorage.getItem(K_PROJECT);
-  project = known(stored) ? stored
-          : known(defaultProject) ? defaultProject
-          : projects[0].name;
-  localStorage.setItem(K_PROJECT, project);
+let filter = "all";       // grid tab: all | todo | progress | done
+let lastOpened = null;    // image to ring and scroll to when back on the grid
 
-  el.projectSel.innerHTML = "";
-  for (const p of projects) {
-    const o = document.createElement("option");
-    o.value = p.name;
-    o.textContent = `${p.name} (${p.images})`;
-    el.projectSel.appendChild(o);
+const hashFor = (p, name) =>
+  "#/" + (p ? encodeURIComponent(p) : "")
+       + (name ? "/" + encodeURIComponent(name) : "");
+
+function parseHash() {
+  let parts;
+  try {
+    parts = location.hash.replace(/^#\/?/, "").split("/")
+      .filter(Boolean).map(decodeURIComponent);
+  } catch (err) {
+    parts = [];               // malformed escape in a hand-edited URL
   }
-  el.projectSel.value = project;
-  fillRuns();
+  return { project: parts[0] || null, image: parts[1] || null };
 }
+
+function showView(name) {
+  view = name;
+  for (const v of ["projects", "dataset", "editor"]) el[v + "View"].hidden = v !== name;
+  // One run dropdown, moved to whichever header needs it, so there is never a
+  // second copy to fall out of step.
+  if (name === "dataset") el.dsRunSlot.appendChild(el.runControls);
+  if (name === "editor") el.edRunSlot.appendChild(el.runControls);
+  status("");
+}
+
+/** Hash changes are queued, so a fast double-click cannot interleave two
+    routes and leave the editor on one image with the list of another. */
+let routing = Promise.resolve();
+window.addEventListener("hashchange", () => { routing = routing.then(route, route); });
+
+async function route() {
+  const want = parseHash();
+
+  // Leaving (or moving within) the editor: the work on screen gets written
+  // first. If that fails, put the URL back and stay; the error is showing.
+  if (view === "editor" && dirty && !(await flush())) {
+    history.replaceState(null, "", hashFor(project, images[idx] && images[idx].name));
+    return;
+  }
+
+  if (!want.project) return showProjects();
+
+  if (!projects.some((p) => p.name === want.project)) {
+    try { await fetchProjects(); } catch (err) { /* reported below */ }
+  }
+  if (!projects.some((p) => p.name === want.project)) {
+    history.replaceState(null, "", "#/");
+    await showProjects();
+    status(`no project named ${want.project}`, true);
+    return;
+  }
+
+  if (want.project !== project || !images.length) {
+    if (!(await openProject(want.project))) return;
+  }
+
+  if (!want.image) return showDataset();
+
+  const i = images.findIndex((im) => im.name === want.image);
+  if (i < 0) {
+    history.replaceState(null, "", hashFor(project));
+    showDataset();
+    status(`no image named ${want.image} in ${project}`, true);
+    return;
+  }
+  showEditor();
+  await load(i);
+}
+
+function backToGrid() {
+  location.hash = hashFor(project);   // route() saves before leaving
+}
+
+// ---------------------------------------------------------------- dom helpers
+
+function h(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;   // never innerHTML: names are user data
+  return n;
+}
+
+/** Thumbnails deliberately leave `run` off the URL: a thumbnail does not
+    depend on it, and including it would refetch every tile on a run switch. */
+const thumbUrl = (p, name, size) =>
+  BASE + "api/thumb/" + encodeURIComponent(name) + "?"
+  + new URLSearchParams({ project: p, size });
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+// ---------------------------------------------------------------- projects
+
+async function showProjects() {
+  showView("projects");
+  document.title = "annotator";
+  try {
+    const data = await fetchProjects();   // fresh: progress changes as you work
+    el.rootPath.textContent = data.root;
+  } catch (err) {
+    el.projectCards.replaceChildren();
+    status("cannot list projects: " + err.message, true);
+    return;
+  }
+  renderProjects();
+}
+
+function renderProjects() {
+  const last = localStorage.getItem(K_PROJECT);
+  const frag = document.createDocumentFragment();
+
+  for (const p of projects) {
+    const card = h("a", "card");
+    card.href = hashFor(p.name);
+    if (p.name === last) card.classList.add("last");
+
+    const cover = h("div", "cover");
+    if (p.cover) {
+      const img = h("img");
+      img.alt = ""; img.loading = "lazy"; img.decoding = "async";
+      img.src = thumbUrl(p.name, p.cover, 512);
+      cover.appendChild(img);
+    }
+
+    const body = h("div", "body");
+
+    const title = h("div", "title");
+    title.appendChild(h("h2", "", p.name));
+    if (p.name === last) title.appendChild(h("span", "tag last", "last opened"));
+    if (p.name === defaultProject) title.appendChild(h("span", "tag", "in config"));
+    title.appendChild(h("span", "total", plural(p.images, "image", "images")));
+
+    const done = p.signed_off || 0, started = p.in_progress || 0;
+    const todo = Math.max(0, p.images - done - started);
+    const pct = (n) => (p.images ? (100 * n) / p.images : 0) + "%";
+    const meter = h("div", "meter");
+    const md = h("span", "d"); md.style.width = pct(done);
+    const mp = h("span", "p"); mp.style.width = pct(started);
+    meter.append(md, mp);
+    meter.title = `${done} signed off, ${started} in progress, ${todo} not started`;
+
+    const stats = h("div", "stats");
+    for (const [cls, n, label] of [["d", done, "signed off"],
+                                   ["p", started, "in progress"],
+                                   ["t", todo, "not started"]]) {
+      const s = h("span", cls);
+      s.append(h("b", "", String(n)), " " + label);
+      stats.appendChild(s);
+    }
+
+    const runs = h("div", "runs");
+    if (p.runs.length) {
+      runs.append(plural(p.runs.length, "run", "runs") + ", latest ",
+                  h("code", "", p.runs[0].name));
+    } else {
+      runs.textContent = "No SAM 3 runs yet";
+    }
+
+    body.append(title, meter, stats, runs);
+    card.append(cover, body);
+    frag.appendChild(card);
+  }
+  el.projectCards.replaceChildren(frag);
+}
+
+// ---------------------------------------------------------------- one project
+
+/** Switch the whole page to a project: run dropdown, image list, exemplar
+    set. Everything per-image is reset first - an index into the old list
+    means nothing in the new one. Returns false if the list could not load. */
+async function openProject(name) {
+  project = name;
+  localStorage.setItem(K_PROJECT, project);
+  fillRuns();
+
+  images = [];
+  boxes = []; preds = []; exems = []; exemSet = null;
+  sel = null; dirty = false; idx = 0; natW = 0; lastOpened = null;
+  clearTimeout(saveTimer);
+  el.search.value = "";
+  status("scanning image folder\u2026");
+
+  try {
+    const r = await fetch(q("api/images"));
+    if (!r.ok) throw new Error(`api/images returned ${r.status}`);
+    images = await r.json();
+  } catch (err) {
+    history.replaceState(null, "", "#/");
+    await showProjects();
+    status(`cannot open ${name}: ${err.message}`, true);
+    return false;
+  }
+  await refreshExemplarSet();
+  return true;
+}
+
+async function refreshExemplarSet() {
+  exemSet = null;
+  try {
+    const r = await fetch(q("api/exemplars"));
+    if (r.ok) exemSet = await r.json();
+  } catch (err) {
+    // Not fatal: annotating works without ever touching the manifest.
+    console.warn("exemplar set unavailable:", err.message);
+  }
+  showSet();
+}
+
+const stateOf = (im) => (im.complete ? "done" : im.boxes > 0 ? "progress" : "todo");
+
+function showDataset() {
+  showView("dataset");
+  document.title = `${project} \u2014 annotator`;
+  el.dsTitle.textContent = project;
+  renderGrid();
+
+  // Coming back from the editor: put the image you just left in view, ringed
+  // in the ribbon's cursor colour, and give it focus so Enter reopens it.
+  const t = lastOpened && [...el.grid.children].find((c) => c.dataset.name === lastOpened);
+  if (t) {
+    t.scrollIntoView({ block: "center" });
+    t.focus({ preventScroll: true });
+  } else {
+    el.gridScroll.scrollTop = 0;
+  }
+  if (!images.length) status(`no images in ${project}/images`, true);
+}
+
+function thumbTier() {
+  const px = Number(el.cellSize.value) * (window.devicePixelRatio || 1);
+  return px > 300 ? 512 : 256;
+}
+
+function renderGrid() {
+  const needle = el.search.value.trim().toLowerCase();
+  const counts = { all: 0, todo: 0, progress: 0, done: 0 };
+  const size = thumbTier();
+  const frag = document.createDocumentFragment();
+
+  images.forEach((im, i) => {
+    if (needle && !im.name.toLowerCase().includes(needle)) return;
+    const st = stateOf(im);
+    counts.all++; counts[st]++;
+    if (filter !== "all" && filter !== st) return;
+    frag.appendChild(tile(im, i, st, size));
+  });
+  el.grid.replaceChildren(frag);
+
+  for (const b of el.tabs.querySelectorAll(".tab")) {
+    b.setAttribute("aria-selected", String(b.dataset.f === filter));
+    b.querySelector(".n").textContent = counts[b.dataset.f];
+  }
+
+  const shown = el.grid.childElementCount;
+  el.gridEmpty.hidden = shown > 0 || !images.length;
+  if (!shown && images.length) {
+    el.gridEmpty.textContent = needle
+      ? `No image names contain \u201c${el.search.value.trim()}\u201d here. Clear the filter or pick another tab.`
+      : "Nothing in this tab yet.";
+  }
+}
+
+function tile(im, i, st, size) {
+  const a = h("a", "tile " + st);
+  a.href = hashFor(project, im.name);
+  a.title = im.name;
+  a.dataset.name = im.name;
+  if (im.name === lastOpened) a.classList.add("last");
+
+  const th = h("div", "thumb");
+  const img = h("img");
+  img.alt = ""; img.loading = "lazy"; img.decoding = "async";
+  img.src = thumbUrl(project, im.name, size);
+  th.append(img, h("span", "idx", String(i + 1)));
+
+  // Signed off with no boxes is a confirmed negative, which is worth saying
+  // out loud: it is a training example, not a forgotten image.
+  let chip = "";
+  if (im.complete) chip = im.boxes ? "\u2713 " + plural(im.boxes, "box", "boxes") : "\u2713 negative";
+  else if (im.boxes) chip = plural(im.boxes, "box", "boxes");
+  if (chip) th.appendChild(h("span", "chip", chip));
+
+  a.append(th, h("div", "bar"), h("div", "cap", im.name));
+  return a;
+}
+
+// A cover that cannot be decoded leaves the dark panel, not a broken-image icon.
+el.projectCards.addEventListener("error", (e) => {
+  if (e.target.tagName === "IMG") e.target.style.visibility = "hidden";
+}, true);
+
+// Thumbnail failures bubble as capture-phase error events on the grid.
+el.grid.addEventListener("error", (e) => {
+  if (e.target.tagName === "IMG") e.target.closest(".tile")?.classList.add("broken");
+}, true);
+
+el.tabs.addEventListener("click", (e) => {
+  const b = e.target.closest(".tab");
+  if (!b) return;
+  filter = b.dataset.f;
+  renderGrid();
+});
+
+el.search.addEventListener("input", renderGrid);
+el.search.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { el.search.value = ""; renderGrid(); el.search.blur(); }
+  e.stopPropagation();
+});
+
+function applyCell() {
+  el.grid.style.setProperty("--cell", el.cellSize.value + "px");
+}
+el.cellSize.addEventListener("input", () => {
+  const before = thumbTier.last;
+  applyCell();
+  localStorage.setItem(K_CELL, el.cellSize.value);
+  // Only re-render when the tile size crosses a thumbnail tier; otherwise
+  // the CSS variable alone resizes everything.
+  thumbTier.last = thumbTier();
+  if (before !== thumbTier.last) renderGrid();
+});
+
+// ---------------------------------------------------------------- editor
+
+function showEditor() {
+  showView("editor");
+  el.backName.textContent = project;
+  el.back.href = hashFor(project);
+}
+
+// ---------------------------------------------------------------- runs
 
 /** Fill the run dropdown for the current project and resolve the selection.
 
@@ -1022,8 +1564,6 @@ function fillRuns() {
   mk.textContent = "\uFF0B New run\u2026";
   el.runSel.appendChild(mk);
 
-  // Only runs that exist on disk are selectable. A run the batch job has not
-  // created yet is made here, with + New run, not offered speculatively.
   const stored = localStorage.getItem(K_RUN(project));
   run = existing.includes(stored) ? stored
       : existing.length ? existing[0]         // most recently modified
@@ -1032,6 +1572,14 @@ function fillRuns() {
   el.delRun.disabled = !run;                  // empty state has nothing to delete
   if (run) localStorage.setItem(K_RUN(project), run);
   else localStorage.removeItem(K_RUN(project));
+}
+
+/** A run only changes predictions and exemplars, never the image list, so
+    the editor stays on the image you were looking at instead of jumping back
+    to the first one. */
+async function runChanged() {
+  await refreshExemplarSet();
+  if (view === "editor" && images[idx]) await load(idx);
 }
 
 /** Name and create a run, then select it.
@@ -1067,38 +1615,7 @@ async function createRun() {
   localStorage.setItem(K_RUN(project), created.run);
   await fetchProjects();      // the new run has to appear in the list
   fillRuns();
-  await loadDataset();
-}
-
-/** Load the image list and exemplar set for the current selection.
-
-    Called on boot and on every dropdown change. Everything per-image is reset
-    first: an index into the old project's list means nothing in the new one. */
-async function loadDataset() {
-  images = [];
-  boxes = []; preds = []; exems = []; exemSet = null;
-  sel = null; dirty = false; idx = 0;
-  clearTimeout(saveTimer);
-  status("scanning image folder\u2026");
-
-  try {
-    const r = await fetch(q("api/images"));
-    if (!r.ok) throw new Error(`api/images returned ${r.status}`);
-    images = await r.json();
-  } catch (err) {
-    status("cannot reach the server: " + err.message, true);
-    return;
-  }
-  if (!images.length) { status(`no images in ${project}/images`, true); return; }
-
-  try {
-    const r = await fetch(q("api/exemplars"));
-    if (r.ok) { exemSet = await r.json(); showSet(); }
-  } catch (err) {
-    // Not fatal: annotating works without ever touching the manifest.
-    console.warn("exemplar set unavailable:", err.message);
-  }
-  load(0);
+  await runChanged();
 }
 
 /** Delete the selected run and everything in it.
@@ -1137,6 +1654,8 @@ async function deleteRun() {
     return;
   }
 
+  if (!(await flush())) return;
+  let done;
   try {
     const r = await fetch(
       BASE + "api/run?" + new URLSearchParams(
@@ -1146,8 +1665,7 @@ async function deleteRun() {
       status(`could not delete run: ${r.status} ${await r.text()}`, true);
       return;
     }
-    const done = await r.json();
-    status(`deleted ${name} (${done.files} files)`);
+    done = await r.json();
   } catch (err) {
     status("could not delete run: " + err.message, true);
     return;
@@ -1158,51 +1676,58 @@ async function deleteRun() {
   localStorage.removeItem(K_RUN(project));
   await fetchProjects();
   fillRuns();
-  await loadDataset();
+  await runChanged();
+  status(`deleted ${name} (${done.files} files)`);
 }
 
-/** Save before tearing anything down; a failed save aborts the switch. */
+/** Save before tearing anything down; a failed save aborts the switch.
+    save() reports failure by returning false, not by throwing, so its result
+    has to be passed on rather than assumed. */
 async function flush() {
   if (!dirty) return true;
-  try { await save(); return true; }
+  try { return await save(); }
   catch (err) {
     status("not switching - save failed: " + err.message, true);
     return false;
   }
 }
 
-async function switchProject(next) {
-  if (!(await flush())) { el.projectSel.value = project; return; }
-  project = next;
-  localStorage.setItem(K_PROJECT, project);
-  fillRuns();                 // runs belong to the project, so this reruns
-  await loadDataset();
-}
-
 async function switchRun(next) {
   if (next === NEW_RUN) return createRun();
   if (!(await flush())) { el.runSel.value = run || ""; return; }
   run = next || null;
+  el.delRun.disabled = !run;
   if (run) localStorage.setItem(K_RUN(project), run);
   else localStorage.removeItem(K_RUN(project));
-  await loadDataset();
+  await runChanged();
 }
 
-el.projectSel.addEventListener("change", () => switchProject(el.projectSel.value));
 el.runSel.addEventListener("change", () => switchRun(el.runSel.value));
 el.delRun.addEventListener("click", deleteRun);
+
+// ---------------------------------------------------------------- boot
 
 (async function main() {
   const t0 = parseFloat(el.thresh.value);
   if (Number.isFinite(t0)) threshold = t0;
+  setMode("annotate");
+
+  const cell = Number(localStorage.getItem(K_CELL));
+  if (cell >= Number(el.cellSize.min) && cell <= Number(el.cellSize.max))
+    el.cellSize.value = String(cell);
+  applyCell();
+  thumbTier.last = thumbTier();
+
   try {
-    await loadProjects();
+    await fetchProjects();
   } catch (err) {
+    showView("projects");
     status("cannot list projects: " + err.message, true);
     return;
   }
-  setMode("annotate");
-  await loadDataset();
+  migrateStorage();
+  pruneStorage();
+  await route();
 })();
 </script>
 </body>

@@ -71,17 +71,20 @@ Run:
 from __future__ import annotations
 
 import argparse
+import io
 import json
+import os
 import shutil
 import socket
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, HTMLResponse
-from PIL import Image
+from fastapi.responses import FileResponse, HTMLResponse, Response
+from PIL import Image, ImageOps
 from pydantic import BaseModel, field_validator
 from importlib.resources import files
 
@@ -111,6 +114,12 @@ PROV_SAM3_ADJUSTED = "sam3_adjusted"  # approved after being moved or resized
 # training labels.
 WRITABLE_PROVENANCE = frozenset({PROV_HUMAN, PROV_SAM3_ASIS, PROV_SAM3_ADJUSTED})
 WRITABLE_QUALITY = frozenset({"verified", "unverified"})
+
+# Thumbnail edge lengths the grid may ask for. A request is snapped UP to the
+# next one, so the on-disk cache holds at most this many copies per image
+# however the browser happens to be sized.
+THUMB_SIZES = (256, 512)
+THUMB_HEADERS = {"Cache-Control": "private, max-age=300"}
 
 # --------------------------------------------------------------------------
 
@@ -479,7 +488,7 @@ def index() -> str:
 
 @app.get("/api/projects")
 def list_projects(cfg: CfgDep) -> dict:
-    """Everything the two dropdowns need, in one call.
+    """Everything the project page and the run dropdown need, in one call.
 
     `default_project` comes from the YAML so a fresh browser lands on whatever
     the SAM 3 script is pointed at, which is nearly always the dataset you want.
@@ -508,16 +517,55 @@ def list_projects(cfg: CfgDep) -> dict:
                                 if r.predictions_dir.is_dir() else 0),
             })
         runs.sort(key=lambda d: d["modified"], reverse=True)
+        names = p.image_names()
+        signed, started = progress(p, names)
         out.append({
             "name": name,
             "runs": runs,
-            "images": len(p.image_names()),
+            "images": len(names),
+            "signed_off": signed,
+            "in_progress": started,
+            "cover": names[0] if names else None,
         })
     return {
         "projects": out,
         "default_project": cfg.paths.dataset,
         "root": str(cfg.paths.root),
     }
+
+
+def progress(project: Project, names: list[str]) -> tuple[int, int]:
+    """(signed off, in progress) for the project card.
+
+    Counted by stem against the current image list, so a flag or annotation
+    left behind by an image that has since been removed does not inflate
+    either number. "In progress" means boxes exist but no sign-off - the same
+    three states the ribbon and the grid colour by.
+
+    Annotated is judged by file size rather than by reading each file: an
+    empty annotation file is exactly what an image with every box deleted
+    leaves behind.
+    """
+    stems = {Path(n).stem for n in names}
+    signed: set[str] = set()
+    if project.flags_dir.is_dir():
+        for f in project.flags_dir.glob("*.txt"):
+            if f.stem not in stems:
+                continue
+            try:
+                if f.read_text().strip() == "1":
+                    signed.add(f.stem)
+            except OSError:
+                pass
+    boxed: set[str] = set()
+    if project.annotations_dir.is_dir():
+        for f in project.annotations_dir.glob("*.txt"):
+            try:
+                if f.stem in stems and f.stat().st_size > 0:
+                    boxed.add(f.stem)
+            except OSError:
+                pass
+    return len(signed), len(boxed - signed)
 
 
 @app.post("/api/run")
@@ -613,6 +661,72 @@ def list_images(project: ProjectDep) -> list[dict]:
 @app.get("/api/image/{name}")
 def get_image(project: ProjectDep, name: str) -> FileResponse:
     return FileResponse(image_path(project, name))
+
+
+def thumb_path(project: Project, name: str, size: int) -> Path:
+    """Cache location for one thumbnail.
+
+    Beside annotations/, never inside images/: images/ may be a symlink into a
+    read-only share. Keyed on the full file name rather than the stem, because
+    the cache must not care whether two images happen to share one.
+    """
+    return project.annotations_dir.parent / ".thumbs" / str(size) / (name + ".jpg")
+
+
+def render_thumb(src: Path, size: int) -> bytes:
+    with Image.open(src) as im:
+        # draft() lets the JPEG decoder skip straight to a reduced scale,
+        # which is most of the cost on large field photos. No-op otherwise.
+        im.draft("RGB", (size, size))
+        # Browsers apply EXIF orientation to <img>, so the thumbnail must too
+        # or the grid would show a photo rotated relative to the editor.
+        im = ImageOps.exif_transpose(im)
+        im = im.convert("RGB")
+        im.thumbnail((size, size), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=82, optimize=True)
+        return buf.getvalue()
+
+
+@app.get("/api/thumb/{name}")
+def get_thumb(
+    project: ProjectDep,
+    name: str,
+    size: Annotated[int, Query(ge=16, le=4096)] = THUMB_SIZES[0],
+) -> Response:
+    """A downscaled JPEG for the grid, cached on disk.
+
+    The cache is best effort. A stale entry is detected by mtime and rebuilt;
+    a project folder that cannot be written to still gets its thumbnails, it
+    just renders them on every request.
+    """
+    src = image_path(project, name)
+    size = next((s for s in THUMB_SIZES if s >= size), THUMB_SIZES[-1])
+    cached = thumb_path(project, name, size)
+    try:
+        if cached.is_file() and cached.stat().st_mtime >= src.stat().st_mtime:
+            return FileResponse(cached, media_type="image/jpeg",
+                                headers=THUMB_HEADERS)
+    except OSError:
+        pass
+
+    try:
+        data = render_thumb(src, size)
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(415, f"cannot decode {name}: {exc}") from exc
+
+    # The endpoint is sync, so FastAPI runs it in a thread pool and two tiles
+    # for the same image can race. A per-thread temp name plus an atomic
+    # replace means the loser simply overwrites with identical bytes.
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_name(
+            f".{cached.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(cached)
+    except OSError:
+        pass
+    return Response(data, media_type="image/jpeg", headers=THUMB_HEADERS)
 
 
 @app.get("/api/annotation/{name}")
