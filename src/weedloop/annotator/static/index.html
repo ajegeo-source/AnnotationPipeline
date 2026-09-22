@@ -142,12 +142,40 @@
 
   .hint {
     position: absolute; left: 12px; bottom: 12px;
-    font-family: ui-monospace, monospace; font-size: 11px; color: var(--dim);
-    background: rgba(13,15,18,.82); border: 1px solid var(--line);
-    border-radius: 2px; padding: 7px 10px; line-height: 1.7;
+    font-size: 11px; color: var(--dim);
+    background: rgba(13,15,18,.88); border: 1px solid var(--line);
+    border-radius: 2px; padding: 8px 11px; line-height: 1.5;
+    /* Click-through: it sits on top of the image, and a box drawn in the
+       bottom-left corner must reach the image, not the help. */
     pointer-events: none;
   }
+  .hint[hidden] { display: none; }
+  /* Generated from the binding table, so it is always what the keys do. */
+  .help-keys { display: grid; grid-template-columns: auto auto; gap: 2px 14px; }
+  .help-keys .keys { text-align: right; white-space: nowrap; }
+  .hint kbd {
+    font-family: var(--mono); font-size: 11px; color: var(--text);
+    border: 1px solid var(--line); border-radius: 2px; padding: 0 4px;
+  }
+  .hint .mouse, .hint .legend {
+    margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--line);
+  }
   .hint b { color: var(--text); font-weight: 500; }
+
+  /* One message at a time, over the image, gone on its own. */
+  .toast {
+    position: absolute; top: 12px; left: 50%; transform: translate(-50%, -6px);
+    padding: 5px 12px; border-radius: 2px; font-size: 12px; pointer-events: none;
+    background: rgba(13,15,18,.9); border: 1px solid var(--line); color: var(--text);
+    opacity: 0; transition: opacity .15s, transform .15s;
+  }
+  .toast.on { opacity: 1; transform: translate(-50%, 0); }
+  @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
+
+  .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
+           font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .timer.idle { opacity: .45; }
+  .viewport.boxes-hidden { cursor: default; }
 
   footer { background: var(--panel); border-top: 1px solid var(--line); }
   #ribbon { display: block; width: 100%; height: 26px; cursor: pointer; }
@@ -337,6 +365,8 @@
   </span>
   <span class="name status" id="name">&mdash;</span>
   <span class="counter" id="counter"></span>
+  <span class="timer" id="timer"
+        title="active time on this image: this visit / all visits. Pauses after a minute without input, or while the tab is hidden."></span>
   <span class="counter" id="boxcount"></span>
   <span class="predcount" id="predcount"></span>
   <span class="exemcount" id="exemcount"></span>
@@ -358,19 +388,19 @@
     <img id="photo" alt="">
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
-  <div class="hint">
-    <b>a</b> / <b>d</b> previous, next &nbsp; <b>f</b> sign off &nbsp;
-    wheel to zoom &nbsp; <b>0</b> to fit &nbsp; middle-drag to pan<br>
-    drag empty space to draw &nbsp; drag a box to move &nbsp;
-    drag a corner to resize<br>
-    <b>enter</b> approves the selected sam3 box &nbsp;
-    <b>del</b> removes yours, hides a sam3 one<br>
-    <b>e</b> switches between annotating and picking exemplars &nbsp;
-    <b>g</b> or <b>esc</b> back to the grid<br>
-    <span style="color:#a855f7">violet</span> yours &nbsp;
-    <span style="color:#ff2d2d">red</span> sam3 &nbsp;
-    <span style="color:#5cc8ff">blue dots</span> sam3 approved &nbsp;
-    <span style="color:#ffb01f">amber</span> exemplar
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="hint" id="hint">
+    <div class="help-keys" id="helpKeys"></div>
+    <div class="mouse">
+      drag empty space to draw &nbsp; drag a box to move &nbsp; drag a corner to resize<br>
+      wheel to zoom &nbsp; middle-drag to pan
+    </div>
+    <div class="legend">
+      <span style="color:#a855f7">violet</span> yours &nbsp;
+      <span style="color:#ff2d2d">red</span> sam3 &nbsp;
+      <span style="color:#5cc8ff">blue dots</span> sam3 approved &nbsp;
+      <span style="color:#ffb01f">amber</span> exemplar
+    </div>
   </div>
 </div>
 
@@ -481,6 +511,10 @@ const el = {
   grid: document.getElementById("grid"),
   gridScroll: document.getElementById("gridScroll"),
   gridEmpty: document.getElementById("gridEmpty"),
+  timer: document.getElementById("timer"),
+  toast: document.getElementById("toast"),
+  hint: document.getElementById("hint"),
+  helpKeys: document.getElementById("helpKeys"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -510,15 +544,8 @@ function fitToViewport() {
 el.viewport.addEventListener("wheel", (e) => {
   if (!natW) return;
   e.preventDefault();
-  const before = scale();
-  zoom = Math.min(20, Math.max(1, zoom * (e.deltaY < 0 ? 1.18 : 1 / 1.18)));
-  const after = scale();
   const r = el.viewport.getBoundingClientRect();
-  const cx = e.clientX - r.left, cy = e.clientY - r.top;
-  panX = cx - (cx - panX) * (after / before);
-  panY = cy - (cy - panY) * (after / before);
-  applyTransform();
-  render();
+  zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX - r.left, e.clientY - r.top);
 }, { passive: false });
 
 let panning = null;
@@ -590,6 +617,7 @@ function toImage(e) {
 /** Every grabbable box, topmost first: yours over sam3, later over earlier. */
 function candidates() {
   const out = [];
+  if (boxesHidden) return out;      // what you cannot see, you cannot grab
   for (let i = exems.length - 1; i >= 0; i--) out.push({ kind: "exem", i, b: exems[i] });
   for (let i = boxes.length - 1; i >= 0; i--) {
     if (twinOfExemplar(boxes[i])) continue;
@@ -648,6 +676,7 @@ let drag = null;    // an existing box being moved or resized
 
 el.svg.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
+  if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
   const p = toImage(e);
   const hit = hitTest(p);
   if (hit) {
@@ -657,6 +686,7 @@ el.svg.addEventListener("mousedown", (e) => {
       drag = {
         kind: hit.kind, i: hit.i, mode: hit.mode, p0: p,
         start: { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 },
+        before: snapshot(),          // for undo, if the drag changes anything
       };
     }
     render();
@@ -710,13 +740,19 @@ function endDrag() {
     if (b.x2 - b.x1 < MIN_BOX || b.y2 - b.y1 < MIN_BOX) Object.assign(b, s);
     const changed = ["x1", "y1", "x2", "y2"].some((k) => Math.abs(b[k] - s[k]) > 0.5);
     if (changed) {
+      const kind = drag.mode === "move" ? "move" : "resize";
       if (drag.kind === "pred") {
         // Nothing is written: this only decides which token the box gets if
         // and when it is approved.
         b.edited = true;
+        const ev = logEvent("pred.adjust", { kind, from: nb(s), to: nb(b), score: b.score });
+        record(`${kind} sam3 box`, drag.before, [ev]);
       } else {
         // An already-approved box that gets nudged is no longer "as is".
         if (b.provenance === PROV_SAM3_ASIS) b.provenance = PROV_SAM3_ADJUSTED;
+        const ev = logEvent("box.edit",
+                            { kind, from: nb(s), to: nb(b), provenance: b.provenance });
+        record(`${kind} box`, drag.before, [ev]);
         touch();
       }
     }
@@ -735,20 +771,29 @@ async function endDraft() {
   const picking = mode === "exemplar";
   draft = null;
   if (x2 - x1 < MIN_BOX || y2 - y1 < MIN_BOX) { render(); return; }
+  const before = snapshot();
 
   const box = {
     x1: clamp(x1, 0, natW), y1: clamp(y1, 0, natH),
     x2: clamp(x2, 0, natW), y2: clamp(y2, 0, natH),
   };
+  let id = null;
   if (picking) {
     render();                       // clear the draft while the POST is in flight
-    const id = await postExemplar(box);
+    id = await postExemplar(box);
     if (id === null) return;
     exems.push({ id, ...box });
     sel = { kind: "exem", i: exems.length - 1 };
   }
   boxes.push({ ...box, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
   if (!picking) sel = { kind: "box", i: boxes.length - 1 };
+  const events = [logEvent("box.draw", { box: nb(box), provenance: PROV_HUMAN })];
+  if (picking) {
+    events.push(logEvent("exemplar.pick", { id, box: nb(box) }));
+    record("exemplar pick", before, events, { exemplar: { kind: "pick", id, box } });
+  } else {
+    record("new box", before, events);
+  }
   touch();
   render();
 }
@@ -767,22 +812,26 @@ window.addEventListener("mouseup", () => {
     annotation file records at which confidence a human was willing to sign
     off. The prediction leaves `preds` so it cannot be approved twice; the file
     in PREDICTION_DIR is untouched. */
-function approve(i) {
+function approve(i, bulk) {
   const p = preds[i];
-  if (!p) return;
+  if (!p) return null;
+  const provenance = p.edited ? PROV_SAM3_ADJUSTED : PROV_SAM3_ASIS;
   boxes.push({
     x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
-    provenance: p.edited ? PROV_SAM3_ADJUSTED : PROV_SAM3_ASIS,
+    provenance,
     quality: "verified",
     score: p.score,
   });
   preds.splice(i, 1);
+  return logEvent("pred.approve", { box: nb(p), score: p.score, provenance, bulk });
 }
 
 function approveSelected() {
   if (!sel || sel.kind !== "pred") return;
-  approve(sel.i);
+  const before = snapshot();
+  const ev = approve(sel.i, false);
   sel = null;
+  record("approval", before, [ev]);
   touch();
   render();
 }
@@ -791,17 +840,53 @@ function approveSelected() {
     already gone from `preds`, so the threshold plus your deletions are exactly
     what this approves. */
 function approveShown() {
-  let n = 0;
+  const before = snapshot();
+  const events = [];
   for (let i = preds.length - 1; i >= 0; i--) {
-    if (preds[i].score >= threshold) { approve(i); n++; }
+    if (preds[i].score >= threshold) events.push(approve(i, true));
   }
-  if (!n) return;
+  if (!events.length) return;
   sel = null;
+  record(`approval of ${plural(events.length, "box", "boxes")}`, before, events);
   touch();
   render();
 }
 
-el.approve.addEventListener("click", approveShown);
+/** Delete means something different for each kind of box, which is why it is
+    one command: your box is removed, a prediction is rejected, an exemplar is
+    un-picked. A rejection only hides the box on screen - predictions are read
+    only - but it is now logged, so it counts in any acceptance statistic. */
+function deleteSelected() {
+  if (!sel) return;
+  if (sel.kind === "exem") { dropExemplar(sel.i); return; }
+  const before = snapshot();
+  if (sel.kind === "pred") {
+    const p = preds[sel.i];
+    const ev = logEvent("pred.reject", { box: nb(p), score: p.score, edited: !!p.edited });
+    preds.splice(sel.i, 1);
+    record("rejection", before, [ev]);
+  } else {
+    const b = boxes[sel.i];
+    const ev = logEvent("box.delete",
+                        { box: nb(b), provenance: b.provenance, score: b.score });
+    boxes.splice(sel.i, 1);
+    record("deletion", before, [ev]);
+    touch();
+  }
+  sel = null;
+  render();
+}
+
+function toggleComplete() {
+  const before = snapshot();
+  complete = !complete;
+  const ev = logEvent("image.signoff", { complete });
+  record(complete ? "sign-off" : "reopening", before, [ev]);
+  touch();
+  render();
+}
+
+el.approve.addEventListener("click", () => approveShown());
 
 // ---------------------------------------------------------------- exemplars
 
@@ -831,22 +916,32 @@ async function postExemplar(box) {
   }
 }
 
+/** Remove one exemplar from the run's manifest. True if it is gone. */
+async function deleteExemplar(id) {
+  try {
+    const r = await fetch(q(`api/exemplar/${id}`), { method: "DELETE" });
+    if (!r.ok) { status(`exemplar ${id} not removed (${r.status})`, true); return false; }
+    const body = await r.json();
+    exemSet = { name: body.set, count: body.count };
+    showSet();
+    return true;
+  } catch (err) {
+    status(`exemplar ${id} not removed: ${err.message}`, true);
+    return false;
+  }
+}
+
 /** Un-pick. The annotation it created stays behind and reappears in violet -
     it is still a plant somebody verified, it just no longer prompts the run. */
 async function dropExemplar(i) {
   const e = exems[i];
-  try {
-    const r = await fetch(q(`api/exemplar/${e.id}`), { method: "DELETE" });
-    if (!r.ok) { status(`exemplar ${e.id} not removed (${r.status})`, true); return; }
-    const body = await r.json();
-    exemSet = { name: body.set, count: body.count };
-    showSet();
-  } catch (err) {
-    status(`exemplar ${e.id} not removed: ${err.message}`, true);
-    return;
-  }
+  const before = snapshot();
+  if (!(await deleteExemplar(e.id))) return;
   exems.splice(i, 1);
   sel = null;
+  const box = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2 };
+  const ev = logEvent("exemplar.drop", { id: e.id, box: nb(box) });
+  record("exemplar un-pick", before, [ev], { exemplar: { kind: "drop", id: e.id, box } });
   render();
 }
 
@@ -857,8 +952,7 @@ function setMode(next) {
   el.viewport.classList.toggle("exemplar", mode === "exemplar");
 }
 
-el.mode.addEventListener("click", () =>
-  setMode(mode === "exemplar" ? "annotate" : "exemplar"));
+el.mode.addEventListener("click", () => toggleMode());
 
 // ---------------------------------------------------------------- render
 
@@ -889,6 +983,7 @@ function handles(b, base) {
 
 function render() {
   while (el.svg.firstChild) el.svg.removeChild(el.svg.firstChild);
+  if (boxesHidden) { renderCounts(0); return; }
 
   // Predictions first, so approved and hand-drawn boxes draw on top of them.
   let shown = 0;
@@ -915,6 +1010,10 @@ function render() {
   const active = at(sel);
   if (active && sel.kind !== "exem") handles(active, classOf(sel.kind, active));
 
+  renderCounts(shown);
+}
+
+function renderCounts(shown) {
   const derived = boxes.filter(fromSam3).length;
   el.boxcount.textContent =
     `${boxes.length} ${boxes.length === 1 ? "box" : "boxes"}`
@@ -990,6 +1089,7 @@ async function save() {
 }
 
 async function load(i) {
+  endVisit();                  // the image being left gets its visit logged
   idx = i;
   const name = images[idx].name;
   const data = await (await fetch(q(`api/annotation/${encodeURIComponent(name)}`))).json();
@@ -1020,6 +1120,7 @@ async function load(i) {
   lastOpened = name;
   document.title = `${name} \u2014 ${project}`;
   el.counter.textContent = `${idx + 1} / ${images.length}`;
+  startVisit(name, (data.active_ms || 0) + pendingActive(project, name));
   fitToViewport();
   drawRibbon();
 
@@ -1036,53 +1137,453 @@ async function go(i) {
   load(i);
 }
 
-// ---------------------------------------------------------------- keys
+// ---------------------------------------------------------------- event log
+//
+// Every decision made here is sent to the project's append-only log on the
+// server (see the module docstring in app.py). Events queue locally and go out
+// in batches; nothing in the editor waits for them.
+
+const newId = () =>
+  (window.crypto && crypto.randomUUID) ? crypto.randomUUID()
+    : Date.now().toString(36) + Math.random().toString(36).slice(2, 12);
+
+const SESSION = newId();            // one per page load: groups a sitting
+const EVENT_FLUSH_MS = 3000;
+const EVENT_QUEUE_CAP = 5000;       // server gone for hours: drop the oldest
+
+let eventQueue = [];                // [{project, ev}]
+let eventsInFlight = [];            // sent, not yet acknowledged
+let flushing = null;
+
+/** Box as normalised [x1, y1, x2, y2], like the annotation files: an event
+    must still mean something if the image is ever resized. */
+const nb = (b) => [b.x1 / natW, b.y1 / natH, b.x2 / natW, b.y2 / natH]
+  .map((v) => Math.round(v * 1e6) / 1e6);
+
+/** Queue one event and return its id, which history entries keep so that an
+    undo can name exactly the events it reverses. `where` overrides the
+    current project/image, for events that outlive the view they describe. */
+function logEvent(type, data = {}, where = {}) {
+  const p = where.project || project;
+  if (!p) return null;
+  const ev = {
+    id: newId(), type, ct: Date.now(), session: SESSION,
+    image: where.image !== undefined ? where.image : (images[idx] ? images[idx].name : null),
+    run: run || null,
+    data,
+  };
+  eventQueue.push({ project: p, ev });
+  if (eventQueue.length > EVENT_QUEUE_CAP) {
+    eventQueue.splice(0, eventQueue.length - EVENT_QUEUE_CAP);
+  }
+  return ev.id;
+}
+
+function byProject(entries) {
+  const groups = new Map();
+  for (const { project: p, ev } of entries) {
+    if (!groups.has(p)) groups.set(p, []);
+    groups.get(p).push(ev);
+  }
+  return groups;
+}
+
+/** Send what is queued. A batch the server refuses (4xx) is dropped - sending
+    it again would be refused again - while one that never got an answer goes
+    back to the front of the queue, in order. */
+function flushEvents() {
+  if (flushing || !eventQueue.length) return flushing || Promise.resolve();
+  eventsInFlight = eventQueue.splice(0, 500);
+  flushing = (async () => {
+    const retry = [];
+    for (const [p, evs] of byProject(eventsInFlight)) {
+      try {
+        const r = await fetch(BASE + "api/events?" + new URLSearchParams({ project: p }), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ events: evs }),
+        });
+        if (r.status >= 400 && r.status < 500) {
+          console.warn(`event batch refused (${r.status}):`, await r.text());
+        } else if (!r.ok) {
+          throw new Error(String(r.status));
+        }
+      } catch (err) {
+        for (const ev of evs) retry.push({ project: p, ev });
+      }
+    }
+    eventQueue = retry.concat(eventQueue);
+    eventsInFlight = [];
+  })().finally(() => { flushing = null; });
+  return flushing;
+}
+
+setInterval(flushEvents, EVENT_FLUSH_MS);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushEvents();
+});
+
+/** Last chance on close: sendBeacon survives the page going away, fetch does
+    not. Whatever is in flight at that moment may be lost; the queue is not. */
+window.addEventListener("pagehide", () => {
+  endVisit();
+  for (const [p, evs] of byProject(eventQueue)) {
+    navigator.sendBeacon(
+      BASE + "api/events?" + new URLSearchParams({ project: p }),
+      new Blob([JSON.stringify({ events: evs })], { type: "application/json" }));
+  }
+  eventQueue = [];
+});
+
+// ---------------------------------------------------------------- visit timer
+//
+// Active time, not wall time: a second counts only while the editor is showing,
+// the tab is visible, and there has been input within IDLE_MS. Looking at an
+// image without touching anything is real work, hence the generous window.
+
+const IDLE_MS = 60_000;
+let lastInput = Date.now();
+let visit = null;   // {project, image, started, lastTick, active, prior}
+
+for (const t of ["pointerdown", "pointermove", "keydown", "wheel"]) {
+  window.addEventListener(t, () => { lastInput = Date.now(); },
+                          { capture: true, passive: true });
+}
+
+/** Visit time that exists locally but not yet on the server, so reopening an
+    image straight away does not show a total missing the last visit. */
+function pendingActive(p, name) {
+  let ms = 0;
+  for (const { project: q2, ev } of eventsInFlight.concat(eventQueue)) {
+    if (q2 === p && ev.image === name && ev.type === "image.visit") ms += ev.data.active_ms;
+  }
+  return ms;
+}
+
+function startVisit(name, priorMs) {
+  endVisit();
+  const t = Date.now();
+  visit = { project, image: name, started: t, lastTick: t, active: 0, prior: priorMs || 0 };
+  showTimer();
+}
+
+function tickVisit() {
+  if (!visit) return;
+  const t = Date.now(), dt = t - visit.lastTick;
+  visit.lastTick = t;
+  if (view === "editor" && document.visibilityState === "visible"
+      && t - lastInput < IDLE_MS) {
+    visit.active += Math.min(dt, 2000);   // a throttled timer must not bank a burst
+  }
+  showTimer();
+}
+
+function endVisit() {
+  if (!visit) return;
+  tickVisit();
+  const v = visit;
+  visit = null;
+  logEvent("image.visit",
+           { active_ms: Math.round(v.active), wall_ms: Date.now() - v.started },
+           { project: v.project, image: v.image });
+}
+
+setInterval(tickVisit, 1000);
+
+function fmtMs(ms) {
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+  const mm = h ? String(m).padStart(2, "0") : String(m);
+  return (h ? h + ":" : "") + mm + ":" + String(r).padStart(2, "0");
+}
+
+function showTimer() {
+  if (!visit) { el.timer.textContent = ""; return; }
+  const total = visit.prior + visit.active;
+  el.timer.textContent = visit.prior
+    ? `${fmtMs(visit.active)} / ${fmtMs(total)}`
+    : fmtMs(visit.active);
+  el.timer.classList.toggle("idle", Date.now() - lastInput >= IDLE_MS);
+}
+
+// ---------------------------------------------------------------- history
+//
+// Undo and redo per image, for the whole session: come back to an image and
+// its history is still there. Each entry keeps the state before and after the
+// edit, so undo and redo are both a plain restore - no per-command inverse to
+// get wrong. The one edit with a side effect outside this tab is an exemplar
+// pick or drop, which writes the run's manifest; those entries replay that
+// write too (see exemplarSide).
+
+const HISTORY_CAP = 200;
+const histories = new Map();        // project + "\0" + image -> {undo, redo}
+
+function hist() {
+  const key = project + "\u0000" + images[idx].name;
+  if (!histories.has(key)) histories.set(key, { undo: [], redo: [] });
+  return histories.get(key);
+}
+
+const clone = (list) => list.map((b) => ({ ...b }));
+const snapshot = () =>
+  ({ boxes: clone(boxes), preds: clone(preds), exems: clone(exems), complete });
+
+function restore(s) {
+  boxes = clone(s.boxes);
+  preds = clone(s.preds);
+  exems = clone(s.exems);
+  complete = s.complete;
+  sel = null;
+}
+
+/** Push one finished edit. `before` was taken before the mutation; the state
+    right now is the "after". A new edit clears the redo stack, as usual. */
+function record(label, before, events, extra = {}) {
+  const h = hist();
+  const after = snapshot();
+  const saves = before.complete !== after.complete
+    || JSON.stringify(before.boxes) !== JSON.stringify(after.boxes);
+  h.undo.push({ label, before, after, saves, run,
+                events: events.filter(Boolean), ...extra });
+  if (h.undo.length > HISTORY_CAP) h.undo.shift();
+  h.redo.length = 0;
+}
+
+/** Undo and redo run one at a time, even when the key is held: an exemplar
+    step waits on the server, and two interleaved restores would corrupt it. */
+let historyChain = Promise.resolve();
+const queueHistory = (dir) => {
+  historyChain = historyChain.then(() => stepHistory(dir), () => stepHistory(dir));
+};
+
+async function stepHistory(dir) {
+  if (view !== "editor" || !images[idx] || drag || draft) return;
+  const h = hist();
+  const [from, to] = dir === "undo" ? [h.undo, h.redo] : [h.redo, h.undo];
+  const e = from.pop();
+  if (!e) { flash(`nothing to ${dir}`); return; }
+  if (e.exemplar && !(await exemplarSide(e, dir))) { from.push(e); return; }
+  restore(dir === "undo" ? e.before : e.after);
+  to.push(e);
+  logEvent("history." + dir, { of: e.events, label: e.label });
+  if (e.saves) touch();
+  render();
+  flash(`${dir === "undo" ? "Undid" : "Redid"} ${e.label}`);
+}
+
+/** Replay an exemplar entry's manifest write. Undoing a pick or redoing a drop
+    removes the exemplar; the other two add it back - under a new id, since the
+    server hands out ids, so every entry that mentions the old one is updated.
+    A re-added exemplar goes to the END of the pick order. */
+async function exemplarSide(e, dir) {
+  const add = (e.exemplar.kind === "pick") === (dir === "redo");
+  if (add) {
+    const id = await postExemplar(e.exemplar.box);
+    if (id === null) return false;
+    retagExemplar(e, e.exemplar.id, id);
+    return true;
+  }
+  return deleteExemplar(e.exemplar.id);
+}
+
+function retagExemplar(current, oldId, newId) {
+  const h = hist();
+  for (const entry of [current, ...h.undo, ...h.redo]) {
+    for (const s of [entry.before, entry.after]) {
+      for (const x of s.exems) if (x.id === oldId) x.id = newId;
+    }
+    if (entry.exemplar && entry.exemplar.id === oldId) entry.exemplar.id = newId;
+  }
+}
+
+/** Predictions in a snapshot belong to the run that was selected when it was
+    taken. Restoring one under another run would show run A's boxes as if
+    they were run B's, so a run switch clears every history. */
+function clearHistories() {
+  histories.clear();
+}
+
+// ---------------------------------------------------------------- commands
+//
+// Every action a key can trigger is a named command. Keys map to command ids
+// per screen; nothing else dispatches on e.key. The help overlay is generated
+// from the same table, so it cannot disagree with what the keys do. A settings
+// screen for editing bindings only has to replace `bindings`.
+
+const COMMANDS = {
+  "image.prev":        { label: "previous image", repeat: true, run: () => go(idx - 1) },
+  "image.next":        { label: "next image", repeat: true, run: () => go(idx + 1) },
+  "image.signoff":     { label: "sign off, or reopen", run: () => toggleComplete() },
+  "edit.undo":         { label: "undo", repeat: true, run: () => queueHistory("undo") },
+  "edit.redo":         { label: "redo", repeat: true, run: () => queueHistory("redo") },
+  "edit.delete":       { label: "delete yours, reject sam3, unpick exemplar", run: () => deleteSelected() },
+  "pred.approve":      { label: "approve the selected sam3 box", run: () => approveSelected() },
+  "pred.approveShown": { label: "approve every shown sam3 box", run: () => approveShown() },
+  "mode.exemplar":     { label: "annotating or picking exemplars", run: () => toggleMode() },
+  "view.fit":          { label: "fit image to screen", run: () => fitToViewport() },
+  "view.zoomIn":       { label: "zoom in", repeat: true, run: () => zoomBy(ZOOM_STEP) },
+  "view.zoomOut":      { label: "zoom out", repeat: true, run: () => zoomBy(1 / ZOOM_STEP) },
+  "view.boxes":        { label: "show or hide all boxes", run: () => toggleBoxes() },
+  "view.help":         { label: "show or hide this help", run: () => toggleHelp() },
+  "nav.escape":        { label: "deselect, then back to the grid", run: () => escapeKey() },
+  "nav.grid":          { label: "back to the grid", run: () => backToGrid() },
+  "grid.search":       { label: "filter by file name", run: () => focusSearch() },
+};
+
+/** Default bindings per screen. Combos are written as comboOf() produces
+    them: modifiers in the order Ctrl, Alt, Shift, then the key. Letters are
+    lower case; Cmd on a Mac counts as Ctrl. */
+const DEFAULT_BINDINGS = {
+  editor: {
+    "a": "image.prev",
+    "d": "image.next",
+    "f": "image.signoff",
+    "Ctrl+z": "edit.undo",
+    "Ctrl+y": "edit.redo",
+    "Ctrl+Shift+z": "edit.redo",
+    "Delete": "edit.delete",
+    "Backspace": "edit.delete",
+    "Enter": "pred.approve",
+    "Shift+Enter": "pred.approveShown",
+    "e": "mode.exemplar",
+    "0": "view.fit",
+    "+": "view.zoomIn",
+    "=": "view.zoomIn",
+    "-": "view.zoomOut",
+    "h": "view.boxes",
+    "?": "view.help",
+    "Escape": "nav.escape",
+    "g": "nav.grid",
+  },
+  dataset: {
+    "/": "grid.search",
+  },
+};
+
+let bindings = DEFAULT_BINDINGS;
+
+/** Canonical name of a key press, or null for a bare modifier.
+
+    Built from e.key, not e.code, so bindings follow the printed key: on a
+    Swiss or German keyboard Ctrl+Z is the key labelled Z. Shift is spelled
+    out for letters and named keys only; for other characters it is already
+    in the character ("?" is Shift+/ on one layout and something else on
+    another, and the binding should not care which). */
+function comboOf(e) {
+  let k = e.key;
+  if (!k || ["Control", "Shift", "Alt", "Meta", "AltGraph", "Dead"].includes(k)) return null;
+  const letter = k.length === 1 && k.toLowerCase() !== k.toUpperCase();
+  const mods = [];
+  if (e.ctrlKey || e.metaKey) mods.push("Ctrl");
+  if (e.altKey) mods.push("Alt");
+  if (e.shiftKey && (letter || k.length > 1)) mods.push("Shift");
+  if (letter) k = k.toLowerCase();
+  if (k === " ") k = "Space";
+  return mods.concat(k).join("+");
+}
 
 window.addEventListener("keydown", (e) => {
-  if (e.target.tagName === "INPUT" || e.target.tagName === "TEXTAREA") return;
-  if (e.ctrlKey || e.metaKey || e.altKey) return;
-  if (view === "dataset" && e.key === "/") {
-    e.preventDefault(); el.search.focus(); el.search.select(); return;
-  }
-  if (view !== "editor") return;
-  switch (e.key) {
-    case "a": go(idx - 1); break;
-    case "d": go(idx + 1); break;
-    case "f":
-      complete = !complete; touch(); render();
-      break;
-    case "e":
-      setMode(mode === "exemplar" ? "annotate" : "exemplar"); break;
-    case "Enter":
-      approveSelected(); break;
-    case "Delete":
-    case "Backspace":
-      if (!sel) break;
-      if (sel.kind === "exem") {
-        dropExemplar(sel.i);
-      } else if (sel.kind === "pred") {
-        // Hides it for this visit only. Rejections are not persisted; what is
-        // persisted is the set of boxes you approved.
-        preds.splice(sel.i, 1);
-        sel = null;
-        render();
-      } else {
-        boxes.splice(sel.i, 1);
-        sel = null;
-        touch();
-        render();
-      }
-      break;
-    case "Escape":
-      // First press deselects, second leaves - the same way out as g.
-      if (sel) { sel = null; render(); } else backToGrid();
-      break;
-    case "g":
-      backToGrid(); break;
-    case "0":
-      fitToViewport(); break;
-  }
+  const t = e.target;
+  if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"
+      || t.isContentEditable) return;
+  const table = bindings[view];
+  if (!table) return;
+  const combo = comboOf(e);
+  const id = combo && table[combo];
+  if (!id) return;
+  e.preventDefault();                 // Ctrl+Z must not reach the browser too
+  const cmd = COMMANDS[id];
+  if (e.repeat && !cmd.repeat) return;
+  cmd.run();
 });
+
+// ---------------------------------------------------------------- help
+
+const KEY_NAMES = {
+  Escape: "esc", Delete: "del", Backspace: "backspace", Enter: "enter",
+  Space: "space", Ctrl: "ctrl", Shift: "shift", Alt: "alt",
+};
+/** "+" is both the separator and a key, so a trailing "+" is the key. */
+function keyLabel(combo) {
+  const parts = combo.endsWith("+") ? [...combo.slice(0, -1).split("+").filter(Boolean), "+"]
+                                    : combo.split("+");
+  return parts.map((p) => KEY_NAMES[p] || p).join(" ");
+}
+
+function renderHelp() {
+  const keysOf = new Map();
+  for (const [combo, id] of Object.entries(bindings.editor || {})) {
+    if (!keysOf.has(id)) keysOf.set(id, []);
+    keysOf.get(id).push(combo);
+  }
+  const frag = document.createDocumentFragment();
+  for (const id of Object.keys(COMMANDS)) {
+    const combos = keysOf.get(id);
+    if (!combos) continue;
+    const keys = h("span", "keys");
+    combos.forEach((c, i) => {
+      if (i) keys.append(" ");
+      keys.appendChild(h("kbd", "", keyLabel(c)));
+    });
+    frag.append(keys, h("span", "", COMMANDS[id].label));
+  }
+  el.helpKeys.replaceChildren(frag);
+}
+
+const K_HELP = "al.help";
+function toggleHelp(force) {
+  const show = force !== undefined ? force : el.hint.hidden;
+  el.hint.hidden = !show;
+  localStorage.setItem(K_HELP, show ? "1" : "0");
+}
+
+// ---------------------------------------------------------------- small commands
+
+const ZOOM_STEP = 1.18;
+
+/** Zoom about a point in viewport pixels; the centre when none is given. */
+function zoomBy(factor, cx, cy) {
+  if (!natW) return;
+  if (cx === undefined) { cx = el.viewport.clientWidth / 2; cy = el.viewport.clientHeight / 2; }
+  const before = scale();
+  zoom = Math.min(20, Math.max(1, zoom * factor));
+  const after = scale();
+  panX = cx - (cx - panX) * (after / before);
+  panY = cy - (cy - panY) * (after / before);
+  applyTransform();
+  render();
+}
+
+let boxesHidden = false;
+function toggleBoxes() {
+  boxesHidden = !boxesHidden;
+  if (boxesHidden) { sel = null; drag = null; }
+  el.viewport.classList.toggle("boxes-hidden", boxesHidden);
+  flash(boxesHidden ? "Boxes hidden: h shows them" : "Boxes shown");
+  render();
+}
+
+function toggleMode() {
+  setMode(mode === "exemplar" ? "annotate" : "exemplar");
+}
+
+function escapeKey() {
+  if (sel) { sel = null; render(); } else backToGrid();
+}
+
+function focusSearch() {
+  el.search.focus();
+  el.search.select();
+}
+
+let flashTimer = null;
+/** A short-lived message over the image, for things that need no answer. */
+function flash(msg) {
+  el.toast.textContent = msg;
+  el.toast.classList.add("on");
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => el.toast.classList.remove("on"), 1600);
+}
 
 // ---------------------------------------------------------------- threshold
 
@@ -1115,7 +1616,7 @@ el.thresh.addEventListener("keydown", (e) => {
   e.stopPropagation();
 });
 
-el.flag.addEventListener("click", () => { complete = !complete; touch(); render(); });
+el.flag.addEventListener("click", () => toggleComplete());
 window.addEventListener("resize", () => {
   if (view !== "editor") return;   // a hidden viewport measures 0 x 0
   if (natW) fitToViewport();
@@ -1212,6 +1713,7 @@ function parseHash() {
 }
 
 function showView(name) {
+  if (view === "editor" && name !== "editor") endVisit();
   view = name;
   for (const v of ["projects", "dataset", "editor"]) el[v + "View"].hidden = v !== name;
   // One run dropdown, moved to whichever header needs it, so there is never a
@@ -1366,6 +1868,7 @@ function renderProjects() {
     set. Everything per-image is reset first - an index into the old list
     means nothing in the new one. Returns false if the list could not load. */
 async function openProject(name) {
+  endVisit();                  // logged against the project it happened in
   project = name;
   localStorage.setItem(K_PROJECT, project);
   fillRuns();
@@ -1578,6 +2081,7 @@ function fillRuns() {
     the editor stays on the image you were looking at instead of jumping back
     to the first one. */
 async function runChanged() {
+  clearHistories();
   await refreshExemplarSet();
   if (view === "editor" && images[idx]) await load(idx);
 }
@@ -1702,7 +2206,12 @@ async function switchRun(next) {
   await runChanged();
 }
 
-el.runSel.addEventListener("change", () => switchRun(el.runSel.value));
+el.runSel.addEventListener("change", () => {
+  // Hand the keyboard back to the editor; a focused <select> would otherwise
+  // swallow every shortcut until you click the image.
+  el.runSel.blur();
+  switchRun(el.runSel.value);
+});
 el.delRun.addEventListener("click", deleteRun);
 
 // ---------------------------------------------------------------- boot
@@ -1711,6 +2220,8 @@ el.delRun.addEventListener("click", deleteRun);
   const t0 = parseFloat(el.thresh.value);
   if (Number.isFinite(t0)) threshold = t0;
   setMode("annotate");
+  renderHelp();
+  toggleHelp(localStorage.getItem(K_HELP) !== "0");
 
   const cell = Number(localStorage.getItem(K_CELL));
   if (cell >= Number(el.cellSize.min) && cell <= Number(el.cellSize.max))

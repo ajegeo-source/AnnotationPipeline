@@ -59,6 +59,17 @@ with no prompt boxes hiding in it.
 Deliberately NOT in the manifest: pad, tile_max_edge and anything else the
 consumer decides. They belong to the run config.
 
+Event log (<project>/events/events.jsonl): one JSON object per line, append
+only, never rewritten. Every decision made in the editor lands here - boxes
+drawn, moved and deleted, predictions approved and REJECTED, exemplars picked
+and dropped, sign-offs, undo and redo, and the active time spent per image
+visit. The annotation files say what the labels are; the log says how they got
+that way, which is what timing statistics, per-run acceptance rates and
+review diffs are computed from. The server stamps each line with its own clock
+and the OS user it runs as, so the log already has an actor column for when
+the tool stops being single-user. Undo does not delete an entry: it appends a
+history.undo line naming the entries it reverses.
+
 Completion flags (one file per image, in <project>/flags/): a single character,
 0 or 1. 1 means "every instance in this image is boxed" - so an image with flag
 1 and zero boxes is a confirmed negative, which is a useful training example.
@@ -71,6 +82,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import getpass
 import io
 import json
 import os
@@ -79,13 +91,13 @@ import socket
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from PIL import Image, ImageOps
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from importlib.resources import files
 
 from weedloop.config import IMAGE_SUFFIXES, Config, Project, Run, load_config
@@ -120,6 +132,20 @@ WRITABLE_QUALITY = frozenset({"verified", "unverified"})
 # however the browser happens to be sized.
 THUMB_SIZES = (256, 512)
 THUMB_HEADERS = {"Cache-Control": "private, max-age=300"}
+
+# The event vocabulary. Closed on purpose: a typo in the client should be a
+# 422 now, not an event type that silently never shows up in any statistic.
+EVENT_TYPES = frozenset({
+    "image.visit", "image.signoff",
+    "box.draw", "box.edit", "box.delete",
+    "pred.approve", "pred.adjust", "pred.reject",
+    "exemplar.pick", "exemplar.drop",
+    "history.undo", "history.redo",
+})
+MAX_EVENT_DATA = 16_384            # bytes of JSON in one event's data
+MAX_EVENT_BATCH = 500
+MAX_VISIT_MS = 24 * 3600 * 1000    # anything longer is a clock bug, not work
+ACTOR = getpass.getuser()          # OOD runs the app as the person using it
 
 # --------------------------------------------------------------------------
 
@@ -477,6 +503,127 @@ def write_flag(project: Project, name: str, complete: bool) -> None:
 
 
 # --------------------------------------------------------------------------
+# Event log. See the module docstring.
+# --------------------------------------------------------------------------
+
+
+class Event(BaseModel):
+    """One event as the browser sends it. The server adds time and actor."""
+
+    id: str = Field(min_length=1, max_length=64)
+    type: str
+    ct: int = Field(ge=0)                       # client clock, ms since epoch
+    session: str = Field(min_length=1, max_length=64)
+    image: str | None = Field(default=None, max_length=512)
+    run: str | None = Field(default=None, max_length=256)
+    data: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("type")
+    @classmethod
+    def _known_type(cls, v: str) -> str:
+        if v not in EVENT_TYPES:
+            raise ValueError(f"unknown event type {v!r}")
+        return v
+
+    @model_validator(mode="after")
+    def _bounded(self) -> "Event":
+        if len(json.dumps(self.data)) > MAX_EVENT_DATA:
+            raise ValueError(f"event {self.id}: data larger than {MAX_EVENT_DATA} bytes")
+        if self.type == "image.visit":
+            # Visit times are summed into totals, so they are the one payload
+            # that has to be numeric and sane rather than merely present.
+            for key in ("active_ms", "wall_ms"):
+                try:
+                    v = int(self.data.get(key, 0))
+                except (TypeError, ValueError) as exc:
+                    raise ValueError(f"event {self.id}: {key} is not a number") from exc
+                self.data[key] = min(max(v, 0), MAX_VISIT_MS)
+        return self
+
+
+class EventBatch(BaseModel):
+    events: list[Event] = Field(max_length=MAX_EVENT_BATCH)
+
+
+class EventLog:
+    """The append-only log of one project, plus totals derived from it.
+
+    Appends are serialised by a lock because sync endpoints run in a thread
+    pool; with one uvicorn worker that makes this the single writer, which is
+    what an NFS-backed file needs. The derived totals are a cache: built by one
+    pass over the file the first time they are asked for, then kept current by
+    folding in each append. The file is the truth; delete nothing from it.
+    """
+
+    def __init__(self, path: Path):
+        self.path = path
+        self._lock = threading.Lock()
+        self._active: dict[str, int] | None = None     # image -> active ms
+
+    def append(self, records: list[dict]) -> None:
+        text = "".join(json.dumps(r, separators=(",", ":"), ensure_ascii=False) + "\n"
+                       for r in records)
+        with self._lock:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            # A crash mid-write can leave a last line without its newline;
+            # appending straight after it would fuse two events into one
+            # unparseable line. Start on a fresh line instead.
+            if self.path.is_file() and self.path.stat().st_size:
+                with self.path.open("rb") as f:
+                    f.seek(-1, os.SEEK_END)
+                    if f.read(1) != b"\n":
+                        text = "\n" + text
+            with self.path.open("a", encoding="utf-8") as f:
+                f.write(text)
+            if self._active is not None:
+                for r in records:
+                    self._fold(r)
+
+    def active_ms(self, image: str) -> int:
+        with self._lock:
+            if self._active is None:
+                self._active = {}
+                for r in self._scan():
+                    self._fold(r)
+            return self._active.get(image, 0)
+
+    def _scan(self):
+        if not self.path.is_file():
+            return
+        with self.path.open(encoding="utf-8") as f:
+            for lineno, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    yield json.loads(line)
+                except ValueError:
+                    print(f"  skipping {self.path.name}:{lineno} - not JSON")
+
+    def _fold(self, r: dict) -> None:
+        if r.get("type") != "image.visit" or not r.get("image"):
+            return
+        try:
+            ms = int(r["data"]["active_ms"])
+        except (KeyError, TypeError, ValueError):
+            return
+        self._active[r["image"]] = self._active.get(r["image"], 0) + max(ms, 0)
+
+
+_event_logs: dict[str, EventLog] = {}
+_event_logs_lock = threading.Lock()
+
+
+def event_log(project: Project) -> EventLog:
+    """One EventLog per file, so every request shares its lock and cache."""
+    path = project.annotations_dir.parent / "events" / "events.jsonl"
+    with _event_logs_lock:
+        log = _event_logs.get(str(path))
+        if log is None:
+            log = _event_logs[str(path)] = EventLog(path)
+        return log
+
+
+# --------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------
 
@@ -754,6 +901,7 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "predictions": [b.model_dump() for b in read_predictions(project, run, name)],
         "exemplars": exemplar_boxes(project, run, name),
         "complete": read_flag(project, name),
+        "active_ms": event_log(project).active_ms(name),
     }
 
 
@@ -765,6 +913,27 @@ def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> di
     write_annotation(project, name, annotation.boxes)
     write_flag(project, name, annotation.complete)
     return {"saved": len(annotation.boxes)}
+
+
+@app.post("/api/events")
+def post_events(project: ProjectDep, batch: EventBatch) -> dict:
+    """Append a batch of events from the browser.
+
+    All or nothing: a batch naming an image this project does not have is
+    refused whole, so a stale tab cannot half-write. The client drops a batch
+    the server refused (it would be refused again) and retries one the server
+    never answered.
+    """
+    stamp = now()
+    records = []
+    for ev in batch.events:
+        if ev.image is not None:
+            image_path(project, ev.image)       # 404 on anything unknown
+        records.append({"t": stamp, "actor": ACTOR, "project": project.name,
+                        **ev.model_dump()})
+    if records:
+        event_log(project).append(records)
+    return {"written": len(records)}
 
 
 @app.get("/api/exemplars")
