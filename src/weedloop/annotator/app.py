@@ -70,6 +70,11 @@ and the OS user it runs as, so the log already has an actor column for when
 the tool stops being single-user. Undo does not delete an entry: it appends a
 history.undo line naming the entries it reverses.
 
+Keyboard and mouse bindings are personal, not per project: they live in
+$XDG_CONFIG_HOME/weedloop/keybindings.json (normally ~/.config/weedloop/) and
+hold only what differs from the defaults, which are defined in the client next
+to the commands themselves.
+
 Completion flags (one file per image, in <project>/flags/): a single character,
 0 or 1. 1 means "every instance in this image is boxed" - so an image with flag
 1 and zero boxes is a confirmed negative, which is a useful training example.
@@ -86,12 +91,13 @@ import getpass
 import io
 import json
 import os
+import re
 import shutil
 import socket
 import threading
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -624,6 +630,95 @@ def event_log(project: Project) -> EventLog:
 
 
 # --------------------------------------------------------------------------
+# Personal settings: keyboard and mouse bindings
+# --------------------------------------------------------------------------
+
+KEYBINDINGS_SCHEMA = 1
+_COMMAND_ID = re.compile(r"^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$")
+MAX_BOUND_COMMANDS = 256
+MAX_INPUTS_PER_COMMAND = 8
+MAX_INPUT_LEN = 48
+
+
+def home_dir() -> Path:
+    """The user's home, even when $HOME is empty.
+
+    A SLURM job session can start with $HOME unset or empty, and an empty
+    $HOME makes "~" resolve to the working directory - settings would land
+    wherever the server happened to be started. The password database knows
+    better, so it is asked whenever the environment does not say.
+    """
+    home = os.environ.get("HOME", "").strip()
+    if home:
+        return Path(home)
+    try:
+        import pwd                  # POSIX only; Windows falls through
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except (ImportError, KeyError):
+        return Path.home()
+
+
+def config_dir() -> Path:
+    xdg = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    if xdg and os.path.isabs(xdg):  # the spec says to ignore a relative one
+        return Path(xdg) / "weedloop"
+    return home_dir() / ".config" / "weedloop"
+
+
+def keybindings_path() -> Path:
+    return config_dir() / "keybindings.json"
+
+
+def display_path(p: Path) -> str:
+    try:
+        return "~/" + str(p.relative_to(home_dir()))
+    except ValueError:
+        return str(p)
+
+
+class Keybindings(BaseModel):
+    """What the binding editor saves.
+
+    Only overrides are stored - a command id mapped to its full list of
+    inputs, an empty list meaning "no shortcut". Commands you never touched
+    are absent and keep following the defaults, including when a later
+    version changes them. Ids are checked for shape only: a file written by a
+    newer version may name commands this one does not have, and those are
+    kept rather than dropped.
+    """
+
+    version: int = KEYBINDINGS_SCHEMA
+    overrides: dict[str, list[str]] = Field(default_factory=dict)
+    pan: Literal["middle", "right", "either"] = "middle"
+
+    @field_validator("version")
+    @classmethod
+    def _known_version(cls, v: int) -> int:
+        if v != KEYBINDINGS_SCHEMA:
+            raise ValueError(f"keybindings schema {v}; this version reads "
+                             f"{KEYBINDINGS_SCHEMA}")
+        return v
+
+    @field_validator("overrides")
+    @classmethod
+    def _sane(cls, overrides: dict[str, list[str]]) -> dict[str, list[str]]:
+        if len(overrides) > MAX_BOUND_COMMANDS:
+            raise ValueError(f"more than {MAX_BOUND_COMMANDS} commands")
+        for cmd, inputs in overrides.items():
+            if not _COMMAND_ID.match(cmd):
+                raise ValueError(f"not a command id: {cmd!r}")
+            if len(inputs) > MAX_INPUTS_PER_COMMAND:
+                raise ValueError(f"{cmd}: more than {MAX_INPUTS_PER_COMMAND} inputs")
+            for i in inputs:
+                if not 0 < len(i) <= MAX_INPUT_LEN or any(ord(ch) < 32 for ch in i):
+                    raise ValueError(f"{cmd}: not an input name: {i!r}")
+        return overrides
+
+
+_keybindings_lock = threading.Lock()
+
+
+# --------------------------------------------------------------------------
 # Routes
 # --------------------------------------------------------------------------
 
@@ -934,6 +1029,43 @@ def post_events(project: ProjectDep, batch: EventBatch) -> dict:
     if records:
         event_log(project).append(records)
     return {"written": len(records)}
+
+
+@app.get("/api/keybindings")
+def get_keybindings() -> dict:
+    """The saved overrides, or none. A file that cannot be read is reported,
+    not fatal: the editor falls back to the defaults and says so."""
+    path = keybindings_path()
+    warning = None
+    kb = Keybindings()
+    if path.is_file():
+        try:
+            kb = Keybindings.model_validate_json(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            first = str(exc).splitlines()[0]
+            warning = (f"{display_path(path)} could not be read ({first}); using the "
+                       f"default shortcuts. The file is kept aside on your next change.")
+    return {**kb.model_dump(), "path": display_path(path), "warning": warning}
+
+
+@app.put("/api/keybindings")
+def put_keybindings(kb: Keybindings) -> dict:
+    """Replace the saved overrides. Written to a temporary file and moved into
+    place. A file that exists but cannot be read is renamed, not overwritten:
+    it may hold hand edits worth recovering."""
+    path = keybindings_path()
+    with _keybindings_lock:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.is_file():
+            try:
+                Keybindings.model_validate_json(path.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+                path.replace(path.with_name(f"{path.stem}.unreadable-{stamp}.json"))
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(kb.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        tmp.replace(path)
+    return {"saved": True, "path": display_path(path)}
 
 
 @app.get("/api/exemplars")

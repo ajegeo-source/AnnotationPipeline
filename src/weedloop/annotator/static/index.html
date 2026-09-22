@@ -172,6 +172,72 @@
   .toast.on { opacity: 1; transform: translate(-50%, 0); }
   @media (prefers-reduced-motion: reduce) { .toast { transition: none; } }
 
+  /* ------------------------------------------------ binding editor */
+  dialog.keys {
+    width: min(780px, 94vw); max-height: 88vh; padding: 0;
+    color: var(--text); background: var(--panel);
+    border: 1px solid var(--line); border-radius: 3px;
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  dialog.keys[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+  dialog.keys::backdrop { background: rgba(5, 6, 8, .62); }
+  .keys-head, .keys-foot {
+    display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+  }
+  .keys-head { border-bottom: 1px solid var(--line); }
+  .keys-foot { border-top: 1px solid var(--line); font-size: 12px; color: var(--dim); }
+  .keys-head h2 { margin: 0; font-size: 14px; font-weight: 600; white-space: nowrap; }
+  .keys-head .field { flex: 1; width: auto; min-width: 0; }
+  .keys-body { overflow: auto; padding: 0 16px 16px; }
+  .keys-body h3 { margin: 18px 0 4px; font-size: 12px; font-weight: 600; }
+  .keys-body h4 { margin: 10px 0 2px 8px; font-size: 11px; font-weight: 500; color: var(--dim); }
+  .keyrow {
+    display: grid; grid-template-columns: minmax(0, 1fr) auto 64px;
+    align-items: center; gap: 6px 12px; padding: 5px 8px; border-radius: 2px;
+  }
+  .keyrow:hover { background: rgba(255, 255, 255, .03); }
+  .keylabel { min-width: 0; }
+  .keylabel .tag { margin-left: 8px; font-size: 11px; }
+  .keylabel .tag.changed { color: var(--human); border-color: var(--human); }
+  .chips { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 6px; }
+  .chip-key {
+    display: inline-flex; align-items: stretch; border: 1px solid var(--line);
+    border-radius: 2px; font: 11px/1.8 var(--mono);
+  }
+  .chip-key kbd { padding: 0 7px; font: inherit; color: var(--text); }
+  .chip-key button {
+    border: 0; border-left: 1px solid var(--line); background: none; cursor: pointer;
+    color: var(--dim); font: inherit; padding: 0 6px;
+  }
+  .chip-key button:hover, .chip-key button:focus-visible { color: #ff6b6b; }
+  .chip-key.shadowed kbd { text-decoration: line-through; color: var(--dim); }
+  .chip-key.capturing { padding: 0 9px; color: var(--human); border-color: var(--human); }
+  .chip-key.capturing:focus { outline: none; }
+  .add-key {
+    min-width: 26px; background: none; color: var(--dim); cursor: pointer;
+    border: 1px dashed var(--line); border-radius: 2px; font: 12px/1.6 var(--mono);
+  }
+  .add-key:hover, .add-key:focus-visible { color: var(--text); border-color: var(--dim); }
+  .keyactions { display: flex; justify-content: flex-end; }
+  .keynote {
+    grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--exem); padding: 2px 0 4px;
+  }
+  .keynote kbd {
+    font: 11px/1.8 var(--mono); color: var(--text); padding: 0 6px;
+    border: 1px solid var(--line); border-radius: 2px;
+  }
+  .radio { display: inline-flex; align-items: center; gap: 4px; margin-left: 10px;
+           color: var(--dim); cursor: pointer; white-space: nowrap; }
+  .radio:has(input:checked) { color: var(--text); }
+  .keyhint { margin: 6px 8px 0; font-size: 12px; color: var(--dim); max-width: 64ch; }
+  .keys-status { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .keys-status.bad { color: #ff6b6b; white-space: normal; }
+  .dialog-spacer { flex: 1; }
+  .keys-body .empty { padding: 30px 0; }
+  .badge:focus-visible, .chip-key button:focus-visible, .add-key:focus-visible,
+  .radio input:focus-visible { outline: 2px solid var(--human); outline-offset: 2px; }
+
   .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
   .timer.idle { opacity: .45; }
@@ -315,6 +381,7 @@
     <span class="counter" id="rootPath"></span>
     <span class="spacer"></span>
     <span class="name status"></span>
+    <button class="badge open-keys" type="button" title="keyboard and mouse shortcuts (k)">keys</button>
   </header>
   <div class="scroll">
     <div class="cards" id="projectCards"></div>
@@ -331,6 +398,7 @@
     <span id="dsRunSlot"></span>
     <span class="spacer"></span>
     <span class="name status"></span>
+    <button class="badge open-keys" type="button" title="keyboard and mouse shortcuts (k)">keys</button>
   </header>
   <div class="toolbar">
     <div class="tabs" id="tabs" role="tablist">
@@ -381,6 +449,7 @@
             title="copy every shown sam3 box into your annotations">approve</button>
   </span>
   <button class="badge" id="flag">not signed off</button>
+  <button class="badge open-keys" type="button" title="keyboard and mouse shortcuts (k)">keys</button>
 </header>
 
 <div class="viewport" id="viewport">
@@ -391,10 +460,7 @@
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="hint" id="hint">
     <div class="help-keys" id="helpKeys"></div>
-    <div class="mouse">
-      drag empty space to draw &nbsp; drag a box to move &nbsp; drag a corner to resize<br>
-      wheel to zoom &nbsp; middle-drag to pan
-    </div>
+    <div class="mouse" id="helpMouse"></div>
     <div class="legend">
       <span style="color:#a855f7">violet</span> yours &nbsp;
       <span style="color:#ff2d2d">red</span> sam3 &nbsp;
@@ -406,6 +472,22 @@
 
 <footer><canvas id="ribbon"></canvas></footer>
 </section>
+
+<dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
+  <div class="keys-head">
+    <h2 id="keysTitle">Keyboard and mouse</h2>
+    <input id="keysFilter" class="field" type="search" autocomplete="off" spellcheck="false"
+           placeholder="Filter by command or shortcut" aria-label="Filter by command or shortcut">
+    <button class="badge" id="keysClose" type="button">done</button>
+  </div>
+  <div class="keys-body" id="keysList"></div>
+  <div class="keys-foot">
+    <span class="keys-status" id="keysStatus" role="status" aria-live="polite"></span>
+    <span class="dialog-spacer"></span>
+    <span id="keysChanged"></span>
+    <button class="badge" id="keysResetAll" type="button">reset all</button>
+  </div>
+</dialog>
 
 <script>
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -515,6 +597,14 @@ const el = {
   toast: document.getElementById("toast"),
   hint: document.getElementById("hint"),
   helpKeys: document.getElementById("helpKeys"),
+  helpMouse: document.getElementById("helpMouse"),
+  keysDialog: document.getElementById("keysDialog"),
+  keysFilter: document.getElementById("keysFilter"),
+  keysList: document.getElementById("keysList"),
+  keysStatus: document.getElementById("keysStatus"),
+  keysChanged: document.getElementById("keysChanged"),
+  keysResetAll: document.getElementById("keysResetAll"),
+  keysClose: document.getElementById("keysClose"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -550,7 +640,7 @@ el.viewport.addEventListener("wheel", (e) => {
 
 let panning = null;
 el.viewport.addEventListener("mousedown", (e) => {
-  if (e.button !== 1) return;
+  if (!PAN_BUTTONS[keyPrefs.pan].includes(e.button)) return;
   e.preventDefault();
   panning = { x: e.clientX - panX, y: e.clientY - panY };
   el.viewport.classList.add("panning");
@@ -564,6 +654,10 @@ window.addEventListener("mousemove", (e) => {
 window.addEventListener("mouseup", () => {
   panning = null;
   el.viewport.classList.remove("panning");
+});
+// A right-button pan must not end in the browser's context menu.
+el.viewport.addEventListener("contextmenu", (e) => {
+  if (PAN_BUTTONS[keyPrefs.pan].includes(2)) e.preventDefault();
 });
 
 // ---------------------------------------------------------------- geometry
@@ -617,7 +711,7 @@ function toImage(e) {
 /** Every grabbable box, topmost first: yours over sam3, later over earlier. */
 function candidates() {
   const out = [];
-  if (boxesHidden) return out;      // what you cannot see, you cannot grab
+  if (boxesHidden || peeking) return out;   // what you cannot see, you cannot grab
   for (let i = exems.length - 1; i >= 0; i--) out.push({ kind: "exem", i, b: exems[i] });
   for (let i = boxes.length - 1; i >= 0; i--) {
     if (twinOfExemplar(boxes[i])) continue;
@@ -676,6 +770,7 @@ let drag = null;    // an existing box being moved or resized
 
 el.svg.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
+  if (peeking) return;
   if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
   const p = toImage(e);
   const hit = hitTest(p);
@@ -983,7 +1078,7 @@ function handles(b, base) {
 
 function render() {
   while (el.svg.firstChild) el.svg.removeChild(el.svg.firstChild);
-  if (boxesHidden) { renderCounts(0); return; }
+  if (boxesHidden || peeking) { renderCounts(0); return; }
 
   // Predictions first, so approved and hand-drawn boxes draw on top of them.
   let shown = 0;
@@ -1405,62 +1500,151 @@ function clearHistories() {
 
 // ---------------------------------------------------------------- commands
 //
-// Every action a key can trigger is a named command. Keys map to command ids
-// per screen; nothing else dispatches on e.key. The help overlay is generated
-// from the same table, so it cannot disagree with what the keys do. A settings
-// screen for editing bindings only has to replace `bindings`.
+// Every action an input can trigger is a named command, and each command
+// carries its own default shortcuts. What you change is stored separately, as
+// overrides (see loadKeys). The dispatcher, the help overlay and the binding
+// editor all read the same resolved tables, so none of them can disagree.
+//
+// `screen` is where a command is active: one of the views, or "global" for
+// every screen. `hold` commands run with true on press and false on release.
+
+const SCREENS = { global: "Everywhere", dataset: "Image grid", editor: "Editor" };
 
 const COMMANDS = {
-  "image.prev":        { label: "previous image", repeat: true, run: () => go(idx - 1) },
-  "image.next":        { label: "next image", repeat: true, run: () => go(idx + 1) },
-  "image.signoff":     { label: "sign off, or reopen", run: () => toggleComplete() },
-  "edit.undo":         { label: "undo", repeat: true, run: () => queueHistory("undo") },
-  "edit.redo":         { label: "redo", repeat: true, run: () => queueHistory("redo") },
-  "edit.delete":       { label: "delete yours, reject sam3, unpick exemplar", run: () => deleteSelected() },
-  "pred.approve":      { label: "approve the selected sam3 box", run: () => approveSelected() },
-  "pred.approveShown": { label: "approve every shown sam3 box", run: () => approveShown() },
-  "mode.exemplar":     { label: "annotating or picking exemplars", run: () => toggleMode() },
-  "view.fit":          { label: "fit image to screen", run: () => fitToViewport() },
-  "view.zoomIn":       { label: "zoom in", repeat: true, run: () => zoomBy(ZOOM_STEP) },
-  "view.zoomOut":      { label: "zoom out", repeat: true, run: () => zoomBy(1 / ZOOM_STEP) },
-  "view.boxes":        { label: "show or hide all boxes", run: () => toggleBoxes() },
-  "view.help":         { label: "show or hide this help", run: () => toggleHelp() },
-  "nav.escape":        { label: "deselect, then back to the grid", run: () => escapeKey() },
-  "nav.grid":          { label: "back to the grid", run: () => backToGrid() },
-  "grid.search":       { label: "filter by file name", run: () => focusSearch() },
+  "keys.open":         { screen: "global", label: "Keyboard and mouse shortcuts",
+                         keys: ["k"], run: () => toggleKeys() },
+
+  "grid.search":       { screen: "dataset", label: "Filter by file name",
+                         keys: ["/"], run: () => focusSearch() },
+
+  "image.prev":        { screen: "editor", group: "Navigate", label: "Previous image",
+                         keys: ["a"], repeat: true, run: () => go(idx - 1) },
+  "image.next":        { screen: "editor", group: "Navigate", label: "Next image",
+                         keys: ["d"], repeat: true, run: () => go(idx + 1) },
+  "nav.grid":          { screen: "editor", group: "Navigate", label: "Back to the grid",
+                         keys: ["g"], run: () => backToGrid() },
+  "nav.escape":        { screen: "editor", group: "Navigate", label: "Deselect, then back to the grid",
+                         keys: ["Escape"], run: () => escapeKey() },
+
+  "edit.undo":         { screen: "editor", group: "Edit", label: "Undo",
+                         keys: ["Ctrl+z"], repeat: true, run: () => queueHistory("undo") },
+  "edit.redo":         { screen: "editor", group: "Edit", label: "Redo",
+                         keys: ["Ctrl+y", "Ctrl+Shift+z"], repeat: true, run: () => queueHistory("redo") },
+  "edit.delete":       { screen: "editor", group: "Edit", label: "Delete yours, reject sam3, unpick exemplar",
+                         keys: ["Delete", "Backspace"], run: () => deleteSelected() },
+  "image.signoff":     { screen: "editor", group: "Edit", label: "Sign off, or reopen",
+                         keys: ["f"], run: () => toggleComplete() },
+
+  "pred.approve":      { screen: "editor", group: "SAM3 predictions", label: "Approve the selected sam3 box",
+                         keys: ["Enter"], run: () => approveSelected() },
+  "pred.approveShown": { screen: "editor", group: "SAM3 predictions", label: "Approve every shown sam3 box",
+                         keys: ["Shift+Enter"], run: () => approveShown() },
+
+  "mode.exemplar":     { screen: "editor", group: "Exemplars", label: "Switch between annotating and picking exemplars",
+                         keys: ["e"], run: () => toggleMode() },
+
+  "view.fit":          { screen: "editor", group: "View", label: "Fit the image to the screen",
+                         keys: ["0"], run: () => fitToViewport() },
+  "view.zoomIn":       { screen: "editor", group: "View", label: "Zoom in",
+                         keys: ["+", "="], repeat: true, run: () => zoomBy(ZOOM_STEP) },
+  "view.zoomOut":      { screen: "editor", group: "View", label: "Zoom out",
+                         keys: ["-"], repeat: true, run: () => zoomBy(1 / ZOOM_STEP) },
+  "view.boxes":        { screen: "editor", group: "View", label: "Show or hide all boxes",
+                         keys: ["h"], run: () => toggleBoxes() },
+  "view.peek":         { screen: "editor", group: "View", label: "Hide all boxes while held",
+                         keys: [], hold: true, run: (down) => peek(down) },
+  "view.help":         { screen: "editor", group: "View", label: "Show or hide the help",
+                         keys: ["?"], run: () => toggleHelp() },
 };
 
-/** Default bindings per screen. Combos are written as comboOf() produces
-    them: modifiers in the order Ctrl, Alt, Shift, then the key. Letters are
-    lower case; Cmd on a Mac counts as Ctrl. */
-const DEFAULT_BINDINGS = {
-  editor: {
-    "a": "image.prev",
-    "d": "image.next",
-    "f": "image.signoff",
-    "Ctrl+z": "edit.undo",
-    "Ctrl+y": "edit.redo",
-    "Ctrl+Shift+z": "edit.redo",
-    "Delete": "edit.delete",
-    "Backspace": "edit.delete",
-    "Enter": "pred.approve",
-    "Shift+Enter": "pred.approveShown",
-    "e": "mode.exemplar",
-    "0": "view.fit",
-    "+": "view.zoomIn",
-    "=": "view.zoomIn",
-    "-": "view.zoomOut",
-    "h": "view.boxes",
-    "?": "view.help",
-    "Escape": "nav.escape",
-    "g": "nav.grid",
-  },
-  dataset: {
-    "/": "grid.search",
-  },
-};
+// ---------------------------------------------------------------- bindings
 
-let bindings = DEFAULT_BINDINGS;
+const PAN_BUTTONS = { middle: [1], right: [2], either: [1, 2] };
+
+let keyPrefs = { version: 1, overrides: {}, pan: "middle" };
+let keyPath = "";            // where the server keeps them, for display
+let tables = {};             // screen -> Map(input -> command id)
+let shadowed = [];           // [{id, input, by}]: shortcuts that lost a clash
+let boundButtons = new Set();
+
+const defaultsOf = (id) => COMMANDS[id].keys || [];
+const isChanged = (id) => Object.prototype.hasOwnProperty.call(keyPrefs.overrides, id);
+const keysOf = (id) => (isChanged(id) ? keyPrefs.overrides[id] : defaultsOf(id));
+const isWheel = (input) => /Wheel(Up|Down)$/.test(input);
+const isMouse = (input) => /Mouse(Back|Forward)$/.test(input);
+
+/** The screens an input on `screen` competes with: its own and the global
+    one. A global input competes with every screen. */
+const rivals = (screen) => (screen === "global" ? Object.keys(SCREENS) : [screen, "global"]);
+
+function ownerOf(screen, input) {
+  for (const s of rivals(screen)) {
+    const id = tables[s] && tables[s].get(input);
+    if (id) return id;
+  }
+  return null;
+}
+
+/** Resolve defaults plus overrides into one lookup table per screen.
+
+    Commands you changed are placed first. If a later version gives some
+    command a default you already use elsewhere, your binding keeps working
+    and the default is the one that yields - it shows struck through in the
+    binding editor rather than silently stealing your key. */
+function buildTables() {
+  tables = Object.fromEntries(Object.keys(SCREENS).map((s) => [s, new Map()]));
+  shadowed = [];
+  boundButtons = new Set();
+  const ids = Object.keys(COMMANDS);
+  for (const id of [...ids.filter(isChanged), ...ids.filter((x) => !isChanged(x))]) {
+    const { screen, hold } = COMMANDS[id];
+    for (const input of keysOf(id)) {
+      if (hold && isWheel(input)) continue;        // a wheel cannot be held
+      const by = ownerOf(screen, input);
+      if (by) { if (by !== id) shadowed.push({ id, input, by }); continue; }
+      tables[screen].set(input, id);
+      if (isMouse(input)) boundButtons.add(input.endsWith("MouseBack") ? 3 : 4);
+    }
+  }
+}
+
+function commandFor(input) {
+  return (tables[view] && tables[view].get(input)) || tables.global.get(input) || null;
+}
+
+/** Store a command's shortcuts as an override - or drop the override when
+    the list is back to the default, so the file only holds real changes.
+
+    Shortcuts shown struck through (lost to another command) are left out:
+    editing a command must never quietly re-activate a key the editor said
+    was not active. Otherwise adding a side button to a command whose default
+    had lost its key would win that key back, simply because the command is
+    now "changed" too and happens to come first in the table. */
+function setKeys(id, list) {
+  const lost = new Set(shadowed.filter((s) => s.id === id).map((s) => s.input));
+  const keys = [...new Set(list)].filter((k) => !lost.has(k));
+  const d = defaultsOf(id);
+  if (keys.length === d.length && keys.every((k) => d.includes(k))) {
+    delete keyPrefs.overrides[id];
+  } else {
+    keyPrefs.overrides[id] = keys;
+  }
+}
+
+buildTables();
+
+// ---------------------------------------------------------------- input names
+
+const MODIFIER_KEYS = ["Control", "Shift", "Alt", "Meta", "AltGraph", "Dead",
+                       "CapsLock", "Fn", "OS", "Hyper", "Super"];
+
+function modsOf(e) {
+  const m = [];
+  if (e.ctrlKey || e.metaKey) m.push("Ctrl");
+  if (e.altKey) m.push("Alt");
+  if (e.shiftKey) m.push("Shift");
+  return m;
+}
 
 /** Canonical name of a key press, or null for a bare modifier.
 
@@ -1468,10 +1652,10 @@ let bindings = DEFAULT_BINDINGS;
     Swiss or German keyboard Ctrl+Z is the key labelled Z. Shift is spelled
     out for letters and named keys only; for other characters it is already
     in the character ("?" is Shift+/ on one layout and something else on
-    another, and the binding should not care which). */
+    another, and the binding should not care which). Cmd counts as Ctrl. */
 function comboOf(e) {
   let k = e.key;
-  if (!k || ["Control", "Shift", "Alt", "Meta", "AltGraph", "Dead"].includes(k)) return null;
+  if (!k || MODIFIER_KEYS.includes(k)) return null;
   const letter = k.length === 1 && k.toLowerCase() !== k.toUpperCase();
   const mods = [];
   if (e.ctrlKey || e.metaKey) mods.push("Ctrl");
@@ -1482,52 +1666,160 @@ function comboOf(e) {
   return mods.concat(k).join("+");
 }
 
+/** Only the side buttons are bindable: left, middle and right are drag
+    gestures (draw, pan), and a click bound to a command would fight them. */
+function mouseInputOf(e) {
+  const name = e.button === 3 ? "MouseBack" : e.button === 4 ? "MouseForward" : null;
+  return name ? modsOf(e).concat(name).join("+") : null;
+}
+
+/** Only the wheel with a modifier held is bindable; the bare wheel zooms.
+    Shift+wheel arrives as horizontal scrolling on some systems. */
+function wheelInputOf(e) {
+  const mods = modsOf(e);
+  const d = e.deltaY || e.deltaX;
+  if (!mods.length || !d) return null;
+  return mods.concat(d < 0 ? "WheelUp" : "WheelDown").join("+");
+}
+
+const KEY_NAMES = {
+  Escape: "esc", Delete: "del", Backspace: "backspace", Enter: "enter",
+  Space: "space", Tab: "tab", Ctrl: "ctrl", Shift: "shift", Alt: "alt",
+  ArrowLeft: "left", ArrowRight: "right", ArrowUp: "up", ArrowDown: "down",
+  PageUp: "page up", PageDown: "page down", Home: "home", End: "end",
+  MouseBack: "mouse back", MouseForward: "mouse forward",
+  WheelUp: "wheel up", WheelDown: "wheel down",
+};
+
+/** "+" is both the separator and a key, so a trailing "+" is the key. */
+function keyLabel(combo) {
+  const parts = combo.endsWith("+")
+    ? [...combo.slice(0, -1).split("+").filter(Boolean), "+"]
+    : combo.split("+");
+  return parts.map((p) => KEY_NAMES[p] || p).join(" ");
+}
+
+// ---------------------------------------------------------------- dispatch
+
+const held = new Map();      // physical key or mouse button -> hold command
+
+function release(key) {
+  const id = held.get(key);
+  if (!id) return;
+  held.delete(key);
+  COMMANDS[id].run(false);
+}
+
+/** Also on blur: a key released while another window has focus never sends
+    its keyup here, and a held command would otherwise stay on. */
+function releaseAll() {
+  for (const key of [...held.keys()]) release(key);
+}
+
 window.addEventListener("keydown", (e) => {
+  if (el.keysDialog.open) return;            // the binding editor owns the keys
   const t = e.target;
   if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"
       || t.isContentEditable) return;
-  const table = bindings[view];
-  if (!table) return;
   const combo = comboOf(e);
-  const id = combo && table[combo];
+  const id = combo && commandFor(combo);
   if (!id) return;
-  e.preventDefault();                 // Ctrl+Z must not reach the browser too
+  e.preventDefault();                        // Ctrl+Z must not reach the browser too
   const cmd = COMMANDS[id];
+  if (cmd.hold) {
+    // Tracked by physical key: if Shift is let go before the key itself, the
+    // keyup no longer spells the same combo, but it is the same key.
+    const key = e.code || e.key;
+    if (!held.has(key)) { held.set(key, id); cmd.run(true); }
+    return;
+  }
   if (e.repeat && !cmd.repeat) return;
   cmd.run();
 });
 
-// ---------------------------------------------------------------- help
+window.addEventListener("keyup", (e) => release(e.code || e.key));
+window.addEventListener("blur", releaseAll);
 
-const KEY_NAMES = {
-  Escape: "esc", Delete: "del", Backspace: "backspace", Enter: "enter",
-  Space: "space", Ctrl: "ctrl", Shift: "shift", Alt: "alt",
-};
-/** "+" is both the separator and a key, so a trailing "+" is the key. */
-function keyLabel(combo) {
-  const parts = combo.endsWith("+") ? [...combo.slice(0, -1).split("+").filter(Boolean), "+"]
-                                    : combo.split("+");
-  return parts.map((p) => KEY_NAMES[p] || p).join(" ");
+window.addEventListener("mousedown", (e) => {
+  const input = mouseInputOf(e);
+  if (!input) return;
+  if (el.keysDialog.open) {
+    if (capture && !capture.conflict) { e.preventDefault(); captureInput(input); }
+    return;
+  }
+  const id = commandFor(input);
+  if (!id) return;
+  e.preventDefault();
+  const cmd = COMMANDS[id];
+  if (cmd.hold) { held.set("button" + e.button, id); cmd.run(true); }
+  else cmd.run();
+}, true);
+
+// Browsers go Back or Forward when a side button is released. That is
+// suppressed for any side button a binding uses, and while the binding editor
+// is open, or a button bound to "next image" would also leave the editor.
+for (const type of ["mouseup", "auxclick"]) {
+  window.addEventListener(type, (e) => {
+    if (e.button !== 3 && e.button !== 4) return;
+    if (type === "mouseup") release("button" + e.button);
+    if (boundButtons.has(e.button) || el.keysDialog.open) e.preventDefault();
+  }, true);
 }
 
-function renderHelp() {
-  const keysOf = new Map();
-  for (const [combo, id] of Object.entries(bindings.editor || {})) {
-    if (!keysOf.has(id)) keysOf.set(id, []);
-    keysOf.get(id).push(combo);
+const WHEEL_STEP = 50;       // px of scrolling per command; a mouse notch is ~100
+let wheelState = { input: null, acc: 0, quietUntil: 0 };
+
+window.addEventListener("wheel", (e) => {
+  const input = wheelInputOf(e);
+  if (!input) return;                        // the bare wheel zooms, as before
+  if (el.keysDialog.open) {
+    if (capture && !capture.conflict) { e.preventDefault(); captureInput(input); }
+    return;
   }
+  const id = commandFor(input);
+  if (!id) return;
+  e.preventDefault();
+  e.stopPropagation();                       // the viewport must not zoom as well
+  // A trackpad sends a stream of small deltas where a mouse sends one per
+  // notch, so scroll distance is accumulated into steps before anything runs.
+  if (wheelState.input !== input) wheelState = { input, acc: 0, quietUntil: 0 };
+  const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1;
+  wheelState.acc += Math.abs(e.deltaY || e.deltaX) * unit;
+  if (wheelState.acc < WHEEL_STEP) return;
+  wheelState.acc = 0;
+  const cmd = COMMANDS[id];
+  const t = performance.now();
+  if (!cmd.repeat && t < wheelState.quietUntil) return;
+  wheelState.quietUntil = t + 300;
+  cmd.run();
+}, { capture: true, passive: false });
+
+// ---------------------------------------------------------------- help
+
+const PAN_TEXT = {
+  middle: "middle-drag to pan", right: "right-drag to pan",
+  either: "middle- or right-drag to pan",
+};
+
+function renderHelp() {
   const frag = document.createDocumentFragment();
   for (const id of Object.keys(COMMANDS)) {
-    const combos = keysOf.get(id);
-    if (!combos) continue;
+    const c = COMMANDS[id];
+    if (c.screen !== "editor" && c.screen !== "global") continue;
+    const inputs = [...tables[c.screen]].filter(([, v]) => v === id).map(([k]) => k);
+    if (!inputs.length) continue;
     const keys = h("span", "keys");
-    combos.forEach((c, i) => {
+    inputs.forEach((k, i) => {
       if (i) keys.append(" ");
-      keys.appendChild(h("kbd", "", keyLabel(c)));
+      keys.appendChild(h("kbd", "", keyLabel(k)));
     });
-    frag.append(keys, h("span", "", COMMANDS[id].label));
+    frag.append(keys, h("span", "", c.label + (c.hold ? " (hold)" : "")));
   }
   el.helpKeys.replaceChildren(frag);
+  el.helpMouse.replaceChildren(
+    "drag empty space to draw \u00a0 drag a box to move \u00a0 drag a corner to resize",
+    h("br"),
+    `wheel to zoom \u00a0 ${PAN_TEXT[keyPrefs.pan]}`);
 }
 
 const K_HELP = "al.help";
@@ -1535,6 +1827,350 @@ function toggleHelp(force) {
   const show = force !== undefined ? force : el.hint.hidden;
   el.hint.hidden = !show;
   localStorage.setItem(K_HELP, show ? "1" : "0");
+}
+
+// ---------------------------------------------------------------- binding editor
+//
+// A list of every command with its shortcuts. + listens for the next key,
+// side button or modifier + wheel; a shortcut that already belongs to
+// another command is not taken without asking. Every change is saved at once
+// to the user's own settings file (see api/keybindings in app.py).
+
+let capture = null;          // {id, conflict?: {input, owner}, error?: string}
+let swallowKeyUp = null;     // the key that just finished a capture
+let escapeHandled = false;   // an Escape that cancelled a capture, not the dialog
+let keysReturnFocus = null;
+
+function toggleKeys() {
+  if (el.keysDialog.open) { el.keysDialog.close(); return; }
+  keysReturnFocus = document.activeElement;
+  releaseAll();
+  capture = null;
+  el.keysDialog.showModal();
+  renderKeys();
+  el.keysFilter.focus();
+}
+
+function focusKey(f) {
+  if (!f) return;
+  const n = el.keysList.querySelector(`[data-f="${CSS.escape(f)}"]`);
+  if (n) n.focus();
+}
+
+function startCapture(id) {
+  capture = { id };
+  renderKeys();
+  focusKey(`cap:${id}`);
+}
+
+function cancelCapture() {
+  const id = capture && capture.id;
+  capture = null;
+  renderKeys();
+  focusKey(`add:${id}`);
+}
+
+function captureInput(input) {
+  const id = capture.id;
+  const cmd = COMMANDS[id];
+  if (cmd.hold && isWheel(input)) {
+    capture = { id, error: "A wheel cannot be held. Press a key or a side button instead." };
+    renderKeys();
+    focusKey(`cap:${id}`);
+    return;
+  }
+  const owner = ownerOf(cmd.screen, input);
+  if (owner === id) {
+    capture = null;
+    renderKeys();
+    focusKey(`add:${id}`);
+    keyStatus(`${keyLabel(input)} already does this.`);
+    return;
+  }
+  if (owner) {
+    capture = { id, conflict: { input, owner } };
+    renderKeys();
+    focusKey(`take:${id}`);
+    return;
+  }
+  assign(id, input);
+}
+
+/** Give `input` to `id`, taking it from `from` first when there is a clash. */
+function assign(id, input, from) {
+  if (from) {
+    setKeys(from, keysOf(from).filter((k) => k !== input));
+    buildTables();              // so `input` no longer counts as taken
+  }
+  setKeys(id, [...keysOf(id), input]);
+  capture = null;
+  saveKeys();
+  focusKey(`add:${id}`);
+}
+
+el.keysDialog.addEventListener("keydown", (e) => {
+  if (!capture) return;                      // typing in the filter, tabbing
+  if (e.key === "Escape") {
+    e.preventDefault();
+    e.stopPropagation();
+    escapeHandled = true;
+    setTimeout(() => { escapeHandled = false; });
+    cancelCapture();
+    return;
+  }
+  if (capture.conflict) return;              // Tab and Enter work the two buttons
+  e.preventDefault();
+  e.stopPropagation();
+  const combo = comboOf(e);
+  if (!combo) return;                        // a modifier alone: wait for the rest
+  swallowKeyUp = e.code || e.key;
+  captureInput(combo);
+}, true);
+
+// The keyup of a captured Space or Enter would otherwise click whatever
+// button has focus by then - usually "+", which starts listening again.
+el.keysDialog.addEventListener("keyup", (e) => {
+  if (swallowKeyUp && (e.code || e.key) === swallowKeyUp) {
+    e.preventDefault();
+    e.stopPropagation();
+    swallowKeyUp = null;
+  }
+}, true);
+
+el.keysDialog.addEventListener("cancel", (e) => {
+  // Escape closes the dialog, except when it is cancelling a capture.
+  if (capture || escapeHandled) {
+    e.preventDefault();
+    if (capture) cancelCapture();
+  }
+});
+
+el.keysDialog.addEventListener("close", () => {
+  capture = null;
+  el.keysFilter.value = "";
+  if (keysReturnFocus && keysReturnFocus.isConnected) keysReturnFocus.focus();
+});
+
+el.keysClose.addEventListener("click", () => el.keysDialog.close());
+el.keysFilter.addEventListener("input", () => { capture = null; renderKeys(); });
+el.keysResetAll.addEventListener("click", () => {
+  if (!window.confirm("Reset every shortcut, and the pan button, to the defaults?")) return;
+  keyPrefs.overrides = {};
+  keyPrefs.pan = "middle";
+  capture = null;
+  saveKeys();
+});
+for (const b of document.querySelectorAll(".open-keys")) {
+  b.addEventListener("click", () => toggleKeys());
+}
+
+function keyMatches(id, needle) {
+  if (!needle) return true;
+  const c = COMMANDS[id];
+  return [c.label, c.group || "", SCREENS[c.screen]]
+      .some((s) => s.toLowerCase().includes(needle))
+    || keysOf(id).some((k) => keyLabel(k).toLowerCase().includes(needle)
+                             || k.toLowerCase() === needle);
+}
+
+function renderKeys() {
+  if (!el.keysDialog.open) return;
+  const active = document.activeElement && document.activeElement.dataset
+    ? document.activeElement.dataset.f : null;
+  const needle = el.keysFilter.value.trim().toLowerCase();
+  const frag = document.createDocumentFragment();
+
+  for (const [screen, title] of Object.entries(SCREENS)) {
+    const ids = Object.keys(COMMANDS)
+      .filter((id) => COMMANDS[id].screen === screen && keyMatches(id, needle));
+    if (!ids.length) continue;
+    const sec = h("section", "keys-screen");
+    sec.appendChild(h("h3", "", title));
+    let group = null;
+    for (const id of ids) {
+      const g = COMMANDS[id].group;
+      if (g && g !== group) sec.appendChild(h("h4", "", (group = g)));
+      sec.appendChild(keyRow(id));
+    }
+    frag.appendChild(sec);
+  }
+  if (!needle || "mouse pan drag button middle right".includes(needle)) {
+    frag.appendChild(panSection());
+  }
+  el.keysList.replaceChildren(frag);
+  if (!el.keysList.childElementCount) {
+    el.keysList.appendChild(h("p", "empty",
+      `No command or shortcut matches \u201c${el.keysFilter.value.trim()}\u201d.`));
+  }
+
+  const n = Object.keys(keyPrefs.overrides).filter((id) => COMMANDS[id]).length
+          + (keyPrefs.pan !== "middle" ? 1 : 0);
+  el.keysChanged.textContent = n ? `${plural(n, "change", "changes")} from the defaults`
+                                 : "All defaults";
+  el.keysResetAll.disabled = !n;
+  if (active) focusKey(active);
+}
+
+function keyRow(id) {
+  const c = COMMANDS[id];
+  const row = h("div", "keyrow" + (isChanged(id) ? " changed" : ""));
+
+  const label = h("span", "keylabel", c.label);
+  if (c.hold) label.appendChild(h("span", "tag", "while held"));
+  if (isChanged(id)) label.appendChild(h("span", "tag changed", "changed"));
+
+  const chips = h("span", "chips");
+  for (const input of keysOf(id)) {
+    const lost = shadowed.find((s) => s.id === id && s.input === input);
+    const chip = h("span", "chip-key" + (lost ? " shadowed" : ""));
+    chip.appendChild(h("kbd", "", keyLabel(input)));
+    if (lost) chip.title = `Not active: ${keyLabel(input)} belongs to \u201c${COMMANDS[lost.by].label}\u201d`;
+    const x = h("button", "", "\u00d7");
+    x.type = "button";
+    x.dataset.f = `rm:${id}:${input}`;
+    x.setAttribute("aria-label", `Remove ${keyLabel(input)} from ${c.label}`);
+    x.addEventListener("click", () => {
+      setKeys(id, keysOf(id).filter((k) => k !== input));
+      capture = null;
+      saveKeys();
+      focusKey(`add:${id}`);
+    });
+    chip.appendChild(x);
+    chips.appendChild(chip);
+  }
+  if (capture && capture.id === id && !capture.conflict) {
+    const cap = h("span", "chip-key capturing",
+      c.hold ? "Press a key or side button\u2026" : "Press a key, side button or modifier + wheel\u2026");
+    cap.tabIndex = -1;
+    cap.dataset.f = `cap:${id}`;
+    chips.appendChild(cap);
+  } else {
+    const add = h("button", "add-key", "+");
+    add.type = "button";
+    add.dataset.f = `add:${id}`;
+    add.title = "Add a shortcut";
+    add.setAttribute("aria-label", `Add a shortcut for ${c.label}`);
+    add.addEventListener("click", () => startCapture(id));
+    chips.appendChild(add);
+  }
+
+  const actions = h("span", "keyactions");
+  if (isChanged(id)) {
+    const d = defaultsOf(id);
+    const reset = h("button", "badge", "reset");
+    reset.type = "button";
+    reset.dataset.f = `reset:${id}`;
+    reset.title = d.length ? `Back to the default: ${d.map(keyLabel).join(", ")}`
+                           : "Back to the default: no shortcut";
+    reset.addEventListener("click", () => {
+      delete keyPrefs.overrides[id];
+      capture = null;
+      saveKeys();
+      focusKey(`add:${id}`);
+    });
+    actions.appendChild(reset);
+  }
+
+  row.append(label, chips, actions);
+  if (capture && capture.id === id && (capture.conflict || capture.error)) {
+    row.appendChild(captureNote(id));
+  }
+  return row;
+}
+
+function captureNote(id) {
+  const note = h("div", "keynote");
+  if (capture.error) { note.textContent = capture.error; return note; }
+  const { input, owner } = capture.conflict;
+  const o = COMMANDS[owner];
+  const where = o.screen === COMMANDS[id].screen ? "" : ` (${SCREENS[o.screen].toLowerCase()})`;
+  note.append(h("kbd", "", keyLabel(input)),
+              ` already runs \u201c${o.label}\u201d${where}.`);
+  const take = h("button", "badge", "move it here");
+  take.type = "button";
+  take.dataset.f = `take:${id}`;
+  take.addEventListener("click", () => assign(id, input, owner));
+  const keep = h("button", "badge", "cancel");
+  keep.type = "button";
+  keep.dataset.f = `keep:${id}`;
+  keep.addEventListener("click", () => cancelCapture());
+  note.append(take, keep);
+  return note;
+}
+
+function panSection() {
+  const sec = h("section", "keys-screen");
+  sec.appendChild(h("h3", "", "Mouse"));
+  const row = h("div", "keyrow");
+  row.appendChild(h("span", "keylabel", "Pan the image by dragging with"));
+  const opts = h("span", "chips");
+  for (const [value, text] of [["middle", "middle button"], ["right", "right button"],
+                               ["either", "either"]]) {
+    const lab = h("label", "radio");
+    const r = h("input");
+    r.type = "radio";
+    r.name = "pan";
+    r.value = value;
+    r.checked = keyPrefs.pan === value;
+    r.dataset.f = `pan:${value}`;
+    r.addEventListener("change", () => { keyPrefs.pan = value; saveKeys(); });
+    lab.append(r, " " + text);
+    opts.appendChild(lab);
+  }
+  row.append(opts, h("span", "keyactions"));
+  sec.append(row, h("p", "keyhint",
+    "The left button draws and moves boxes, and the plain wheel zooms. Side buttons, "
+    + "and the wheel with ctrl, alt or shift held, can be bound to any command above."));
+  return sec;
+}
+
+function keyStatus(msg, bad) {
+  el.keysStatus.textContent = msg;
+  el.keysStatus.classList.toggle("bad", !!bad);
+}
+
+/** Apply at once, then save. Saves go out one at a time and in order, each
+    carrying the state at the moment of the change. */
+let keySaves = Promise.resolve();
+function saveKeys() {
+  buildTables();
+  renderKeys();
+  renderHelp();
+  const body = JSON.stringify(keyPrefs);
+  keySaves = keySaves.then(async () => {
+    try {
+      const r = await fetch(BASE + "api/keybindings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      keyPath = (await r.json()).path || keyPath;
+      keyStatus(`Saved to ${keyPath}`);
+    } catch (err) {
+      keyStatus(`Not saved (${err.message}). The change works in this tab until you reload.`, true);
+    }
+  });
+}
+
+async function loadKeys() {
+  try {
+    const r = await fetch(BASE + "api/keybindings");
+    if (!r.ok) throw new Error(`api/keybindings returned ${r.status}`);
+    const data = await r.json();
+    keyPrefs = {
+      version: data.version || 1,
+      overrides: data.overrides || {},
+      pan: PAN_BUTTONS[data.pan] ? data.pan : "middle",
+    };
+    keyPath = data.path || "";
+    keyStatus(data.warning || (keyPath ? `Saved to ${keyPath}` : ""), !!data.warning);
+    if (data.warning) console.warn(data.warning);
+  } catch (err) {
+    keyStatus(`Using the default shortcuts: ${err.message}`, true);
+  }
+  buildTables();
+  renderHelp();
 }
 
 // ---------------------------------------------------------------- small commands
@@ -1560,6 +2196,15 @@ function toggleBoxes() {
   if (boxesHidden) { sel = null; drag = null; }
   el.viewport.classList.toggle("boxes-hidden", boxesHidden);
   flash(boxesHidden ? "Boxes hidden: h shows them" : "Boxes shown");
+  render();
+}
+
+/** The held twin of toggleBoxes: boxes disappear for as long as the key is
+    down, to see what is underneath, and come back on release. */
+let peeking = false;
+function peek(down) {
+  if (down && (drag || draft)) return;       // not in the middle of an edit
+  peeking = down;
   render();
 }
 
@@ -1713,6 +2358,7 @@ function parseHash() {
 }
 
 function showView(name) {
+  releaseAll();
   if (view === "editor" && name !== "editor") endVisit();
   view = name;
   for (const v of ["projects", "dataset", "editor"]) el[v + "View"].hidden = v !== name;
@@ -2220,8 +2866,8 @@ el.delRun.addEventListener("click", deleteRun);
   const t0 = parseFloat(el.thresh.value);
   if (Number.isFinite(t0)) threshold = t0;
   setMode("annotate");
-  renderHelp();
   toggleHelp(localStorage.getItem(K_HELP) !== "0");
+  await loadKeys();
 
   const cell = Number(localStorage.getItem(K_CELL));
   if (cell >= Number(el.cellSize.min) && cell <= Number(el.cellSize.max))
