@@ -70,10 +70,10 @@ and the OS user it runs as, so the log already has an actor column for when
 the tool stops being single-user. Undo does not delete an entry: it appends a
 history.undo line naming the entries it reverses.
 
-Keyboard and mouse bindings are personal, not per project: they live in
-$XDG_CONFIG_HOME/weedloop/keybindings.json (normally ~/.config/weedloop/) and
-hold only what differs from the defaults, which are defined in the client next
-to the commands themselves.
+Personal settings - input bindings and pointer speeds - apply to every project
+and live in $XDG_CONFIG_HOME/weedloop/settings.json (normally
+~/.config/weedloop/). Bindings are stored only where they differ from the
+defaults, which are defined in the client next to the commands themselves.
 
 Completion flags (one file per image, in <project>/flags/): a single character,
 0 or 1. 1 means "every instance in this image is boxed" - so an image with flag
@@ -630,14 +630,15 @@ def event_log(project: Project) -> EventLog:
 
 
 # --------------------------------------------------------------------------
-# Personal settings: keyboard and mouse bindings
+# Personal settings: input bindings and pointer speeds
 # --------------------------------------------------------------------------
 
-KEYBINDINGS_SCHEMA = 1
+SETTINGS_SCHEMA = 1
 _COMMAND_ID = re.compile(r"^[a-z][A-Za-z0-9]*(\.[A-Za-z0-9]+)+$")
 MAX_BOUND_COMMANDS = 256
 MAX_INPUTS_PER_COMMAND = 8
 MAX_INPUT_LEN = 48
+SPEED_MIN, SPEED_MAX = 0.1, 3.0
 
 
 def home_dir() -> Path:
@@ -665,7 +666,11 @@ def config_dir() -> Path:
     return home_dir() / ".config" / "weedloop"
 
 
-def keybindings_path() -> Path:
+def settings_path() -> Path:
+    return config_dir() / "settings.json"
+
+
+def legacy_keybindings_path() -> Path:
     return config_dir() / "keybindings.json"
 
 
@@ -676,35 +681,42 @@ def display_path(p: Path) -> str:
         return str(p)
 
 
-class Keybindings(BaseModel):
-    """What the binding editor saves.
+class PointerSettings(BaseModel):
+    """How far the image moves per pixel of drag, and how much one wheel
+    notch zooms. Both are multipliers of the built-in behaviour."""
 
-    Only overrides are stored - a command id mapped to its full list of
-    inputs, an empty list meaning "no shortcut". Commands you never touched
+    pan_gain: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)
+    zoom_speed: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)
+
+
+class PersonalSettings(BaseModel):
+    """What the settings dialog saves.
+
+    `bindings` holds overrides only - a command id mapped to its full list of
+    inputs, an empty list meaning "nothing bound". Commands you never touched
     are absent and keep following the defaults, including when a later
     version changes them. Ids are checked for shape only: a file written by a
     newer version may name commands this one does not have, and those are
     kept rather than dropped.
     """
 
-    version: int = KEYBINDINGS_SCHEMA
-    overrides: dict[str, list[str]] = Field(default_factory=dict)
-    pan: Literal["middle", "right", "either"] = "middle"
+    version: int = SETTINGS_SCHEMA
+    bindings: dict[str, list[str]] = Field(default_factory=dict)
+    pointer: PointerSettings = Field(default_factory=PointerSettings)
 
     @field_validator("version")
     @classmethod
     def _known_version(cls, v: int) -> int:
-        if v != KEYBINDINGS_SCHEMA:
-            raise ValueError(f"keybindings schema {v}; this version reads "
-                             f"{KEYBINDINGS_SCHEMA}")
+        if v != SETTINGS_SCHEMA:
+            raise ValueError(f"settings schema {v}; this version reads {SETTINGS_SCHEMA}")
         return v
 
-    @field_validator("overrides")
+    @field_validator("bindings")
     @classmethod
-    def _sane(cls, overrides: dict[str, list[str]]) -> dict[str, list[str]]:
-        if len(overrides) > MAX_BOUND_COMMANDS:
+    def _sane(cls, bindings: dict[str, list[str]]) -> dict[str, list[str]]:
+        if len(bindings) > MAX_BOUND_COMMANDS:
             raise ValueError(f"more than {MAX_BOUND_COMMANDS} commands")
-        for cmd, inputs in overrides.items():
+        for cmd, inputs in bindings.items():
             if not _COMMAND_ID.match(cmd):
                 raise ValueError(f"not a command id: {cmd!r}")
             if len(inputs) > MAX_INPUTS_PER_COMMAND:
@@ -712,10 +724,23 @@ class Keybindings(BaseModel):
             for i in inputs:
                 if not 0 < len(i) <= MAX_INPUT_LEN or any(ord(ch) < 32 for ch in i):
                     raise ValueError(f"{cmd}: not an input name: {i!r}")
-        return overrides
+        return bindings
 
 
-_keybindings_lock = threading.Lock()
+def from_legacy_keybindings(path: Path) -> PersonalSettings:
+    """Read keybindings.json, the first format: {"overrides": ..., "pan":
+    "middle" | "right" | "either"}. Panning is a command now, so the pan
+    choice becomes that command's binding."""
+    data = json.loads(path.read_text(encoding="utf-8"))
+    bindings = dict(data.get("overrides") or {})
+    pan = {"right": ["MouseRight"],
+           "either": ["MouseMiddle", "MouseRight"]}.get(data.get("pan"))
+    if pan and "view.pan" not in bindings:
+        bindings["view.pan"] = pan
+    return PersonalSettings(bindings=bindings)
+
+
+_settings_lock = threading.Lock()
 
 
 # --------------------------------------------------------------------------
@@ -1031,40 +1056,52 @@ def post_events(project: ProjectDep, batch: EventBatch) -> dict:
     return {"written": len(records)}
 
 
-@app.get("/api/keybindings")
-def get_keybindings() -> dict:
-    """The saved overrides, or none. A file that cannot be read is reported,
-    not fatal: the editor falls back to the defaults and says so."""
-    path = keybindings_path()
-    warning = None
-    kb = Keybindings()
-    if path.is_file():
+@app.get("/api/settings")
+def get_settings() -> dict:
+    """The saved personal settings, or the defaults. A file that cannot be
+    read is reported, not fatal: the dialog falls back to the defaults and
+    says so. Without settings.json, an older keybindings.json is carried over."""
+    path, legacy = settings_path(), legacy_keybindings_path()
+    warning = note = None
+    settings = PersonalSettings()
+    source = path if path.is_file() else legacy if legacy.is_file() else None
+    if source is not None:
         try:
-            kb = Keybindings.model_validate_json(path.read_text(encoding="utf-8"))
+            if source == path:
+                settings = PersonalSettings.model_validate_json(
+                    path.read_text(encoding="utf-8"))
+            else:
+                settings = from_legacy_keybindings(legacy)
+                note = (f"Shortcuts carried over from {display_path(legacy)}; they "
+                        f"are saved to {display_path(path)} on your next change.")
         except (ValueError, OSError) as exc:
             first = str(exc).splitlines()[0]
-            warning = (f"{display_path(path)} could not be read ({first}); using the "
-                       f"default shortcuts. The file is kept aside on your next change.")
-    return {**kb.model_dump(), "path": display_path(path), "warning": warning}
+            warning = (f"{display_path(source)} could not be read ({first}); using "
+                       f"the defaults. The file is kept aside on your next change.")
+    return {**settings.model_dump(), "path": display_path(path),
+            "warning": warning, "note": note}
 
 
-@app.put("/api/keybindings")
-def put_keybindings(kb: Keybindings) -> dict:
-    """Replace the saved overrides. Written to a temporary file and moved into
-    place. A file that exists but cannot be read is renamed, not overwritten:
-    it may hold hand edits worth recovering."""
-    path = keybindings_path()
-    with _keybindings_lock:
+@app.put("/api/settings")
+def put_settings(settings: PersonalSettings) -> dict:
+    """Replace the saved settings: written to a temporary file and moved into
+    place. A file that exists but cannot be read is renamed rather than
+    overwritten - it may hold hand edits worth recovering - and a carried-over
+    keybindings.json is renamed once its contents are safely in settings.json."""
+    path, legacy = settings_path(), legacy_keybindings_path()
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    with _settings_lock:
         path.parent.mkdir(parents=True, exist_ok=True)
         if path.is_file():
             try:
-                Keybindings.model_validate_json(path.read_text(encoding="utf-8"))
+                PersonalSettings.model_validate_json(path.read_text(encoding="utf-8"))
             except (ValueError, OSError):
-                stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
                 path.replace(path.with_name(f"{path.stem}.unreadable-{stamp}.json"))
         tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(kb.model_dump_json(indent=2) + "\n", encoding="utf-8")
+        tmp.write_text(settings.model_dump_json(indent=2) + "\n", encoding="utf-8")
         tmp.replace(path)
+        if legacy.is_file():
+            legacy.replace(legacy.with_name(f"{legacy.stem}.carried-over-{stamp}.json"))
     return {"saved": True, "path": display_path(path)}
 
 
