@@ -41,6 +41,13 @@
     padding: 0 14px; height: 40px;
     background: var(--panel); border-bottom: 1px solid var(--line);
   }
+  /* No item ever breaks inside itself ("5 / 40" on two lines); when a row is
+     full, whole items move to a second row instead of running off screen. */
+  header { flex-wrap: wrap; height: auto; min-height: 40px; padding: 5px 14px; row-gap: 5px; }
+  header > * { flex: none; white-space: nowrap; }
+  header > .spacer { flex: 1 1 0; }
+  header > .name { flex: 0 1 auto; min-width: 6ch; }
+  @media (max-width: 1500px) { header { column-gap: 12px; } }
   .name {
     font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
     font-size: 12px; letter-spacing: .01em;
@@ -261,6 +268,30 @@
   .legend-item { display: inline-flex; align-items: center; gap: 5px;
                  margin-right: 12px; white-space: nowrap; }
 
+  /* ------------------------------------------------ minimap */
+  .minimap {
+    position: absolute; top: 12px; right: 12px; z-index: 2; padding: 4px;
+    background: rgba(13, 15, 18, .88); border: 1px solid var(--line); border-radius: 3px;
+    cursor: pointer; user-select: none;
+  }
+  .minimap[hidden] { display: none; }
+  .minimap canvas { display: block; border-radius: 2px; }
+  .mm-foot {
+    display: flex; justify-content: space-between; gap: 10px; padding: 4px 2px 0;
+    font: 11px/1.3 var(--mono); color: var(--text); font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .mm-foot .paused { color: var(--dim); }
+  /* The one handle that moves it: its top-right corner. */
+  .mm-grip {
+    position: absolute; top: -7px; right: -7px; width: 16px; height: 16px; cursor: move;
+    background: var(--panel) radial-gradient(circle, var(--dim) 1px, transparent 1.5px) 0 0 / 4px 4px;
+    border: 1px solid var(--dim); border-radius: 2px;
+  }
+  .mm-grip:hover, .minimap.moving .mm-grip { border-color: var(--text); }
+  .toast { z-index: 3; }
+  .mmtoggle { margin: 4px 8px 6px; }
+
   .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
   .timer.idle { opacity: .45; }
@@ -404,7 +435,6 @@
     <span class="counter" id="rootPath"></span>
     <span class="spacer"></span>
     <span class="name status"></span>
-    <button class="badge open-keys" type="button" title="mouse speeds and shortcuts (k)">settings</button>
   </header>
   <div class="scroll">
     <div class="cards" id="projectCards"></div>
@@ -486,6 +516,11 @@
     <line id="curV" visibility="hidden"></line>
     <line id="curH" visibility="hidden"></line>
   </svg>
+  <div class="minimap" id="minimap" hidden>
+    <canvas id="mmCanvas" aria-label="Minimap: press or drag to move the view"></canvas>
+    <div class="mm-foot"><span id="mmZoom"></span><span id="mmSeen"></span></div>
+    <span class="mm-grip" id="mmGrip" title="Drag to move the minimap"></span>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="hint" id="hint">
     <div class="help-keys" id="helpKeys"></div>
@@ -639,6 +674,11 @@ const el = {
   chH: document.getElementById("chH"),
   curV: document.getElementById("curV"),
   curH: document.getElementById("curH"),
+  minimap: document.getElementById("minimap"),
+  mmCanvas: document.getElementById("mmCanvas"),
+  mmGrip: document.getElementById("mmGrip"),
+  mmZoom: document.getElementById("mmZoom"),
+  mmSeen: document.getElementById("mmSeen"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -653,6 +693,7 @@ const scale = () => fit * zoom;
 
 function applyTransform() {
   el.stage.style.transform = `translate(${panX}px, ${panY}px) scale(${scale()})`;
+  scheduleMinimap();
 }
 
 function fitToViewport() {
@@ -674,7 +715,7 @@ let panning = null;
     above 1 a short flick crosses a large image, below 1 gives fine control at
     high zoom, and at exactly 1 the image stays under the cursor. */
 function panStart(e) {
-  panning = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+  panning = { x: e.clientX, y: e.clientY, px: panX, py: panY, button: e.button };
   el.viewport.classList.add("panning");
   // "Grabbing" says what is happening; the drawn cursor steps aside until the
   // pointer next moves over the image.
@@ -689,9 +730,17 @@ window.addEventListener("mousemove", (e) => {
   panY = panning.py + (e.clientY - panning.y) * g;
   applyTransform();
 });
-window.addEventListener("mouseup", () => {
+window.addEventListener("mouseup", (e) => {
+  if (!panning || e.button !== panning.button) return;
   panning = null;
   el.viewport.classList.remove("panning");
+  // A box still open wants the drawing cursor back now, not at the next
+  // hover - the hover handler stands aside while a box is open.
+  if (draft) {
+    el.svg.style.cursor = styleOf("cursor").show ? "none" : "crosshair";
+    overBox = false;
+    schedulePointer();
+  }
 });
 
 // ---------------------------------------------------------------- geometry
@@ -798,18 +847,26 @@ let draft = null;   // a new box being dragged out
 let drag = null;    // an existing box being moved or resized
 
 /** A press of the button bound to "Draw, move and resize boxes" (left by
-    default): grab the box or corner under the pointer, or start a new box. */
+    default). With a box open in two-click mode, the press finishes it,
+    wherever it lands. Otherwise: grab the box or corner under the pointer,
+    or start a new box. */
+let drawHintShown = false;
 function pointerEditStart(e) {
   if (peeking) return;
   if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
   const p = toImage(e);
+  if (draft && draft.open) {
+    draft.x1 = p.x; draft.y1 = p.y;
+    endDraft();
+    return;
+  }
   const hit = hitTest(p);
   if (hit) {
     sel = { kind: hit.kind, i: hit.i };
     if (hit.mode !== "pick") {
       const b = at(sel);
       drag = {
-        kind: hit.kind, i: hit.i, mode: hit.mode, p0: p,
+        kind: hit.kind, i: hit.i, mode: hit.mode, p0: p, button: e.button,
         start: { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 },
         before: snapshot(),          // for undo, if the drag changes anything
       };
@@ -817,8 +874,16 @@ function pointerEditStart(e) {
     render();
     return;
   }
-  draft = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
+  // In two-click mode this press only sets the first corner. The box then
+  // follows the pointer with no button held - through pans and zooms - until
+  // the next press of this button finishes it, or esc cancels it.
+  const open = prefs.pointer.draw !== "drag";
+  draft = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, button: e.button, open };
   sel = null;
+  if (open && !drawHintShown) {
+    drawHintShown = true;
+    flash("Click again to finish the box, esc to cancel");
+  }
   render();
 }
 
@@ -838,7 +903,12 @@ el.svg.addEventListener("mouseleave", () => {
 });
 
 // On window, not on the svg: a drag that leaves the image should keep tracking.
+let lastClient = null;       // where the pointer last was, for followPointer()
 window.addEventListener("mousemove", (e) => {
+  // While the minimap is being used, an open box waits: its corner should not
+  // jump to whatever part of the image the minimap happens to cover.
+  if (mmDrag || mmNav || (draft && draft.open && e.target.closest && e.target.closest(".minimap"))) return;
+  lastClient = { clientX: e.clientX, clientY: e.clientY };
   if (drag) { dragTo(toImage(e)); return; }
   if (draft) {
     const p = toImage(e);
@@ -932,10 +1002,24 @@ async function endDraft() {
   render();
 }
 
-window.addEventListener("mouseup", () => {
-  if (drag) { endDrag(); return; }
-  if (draft) endDraft();
+// Only the button that started a drag ends it, so releasing the pan button
+// halfway through never finishes a box. A box in two-click mode ends on no
+// release at all: the next press finishes it.
+window.addEventListener("mouseup", (e) => {
+  if (drag) { if (e.button === drag.button) endDrag(); return; }
+  if (draft && !draft.open && e.button === draft.button) endDraft();
 });
+
+/** After the view moves while the pointer stays still (a zoom), put the open
+    corner of a box, or a box being dragged, back under the pointer. Panning
+    needs no help: it moves the pointer, and mousemove does the rest. */
+function followPointer() {
+  if (!lastClient || !(draft || drag)) return;
+  const p = toImage(lastClient);
+  if (drag) { dragTo(p); return; }
+  draft.x1 = p.x; draft.y1 = p.y;
+  render();
+}
 
 // ---------------------------------------------------------------- approving
 
@@ -1152,6 +1236,7 @@ function render() {
 }
 
 function renderCounts(shown) {
+  scheduleMinimap();                 // the dots follow the boxes
   const derived = boxes.filter(fromSam3).length;
   el.boxcount.textContent =
     `${boxes.length} ${boxes.length === 1 ? "box" : "boxes"}`
@@ -1255,6 +1340,8 @@ async function load(i) {
   el.stage.style.width = natW + "px";
   el.stage.style.height = natH + "px";
   el.svg.setAttribute("viewBox", `0 0 ${natW} ${natH}`);
+  mmBase = null;                     // not the last image's picture meanwhile
+  startCoverage(name, data.coverage);
   el.photo.src = q(`api/image/${encodeURIComponent(name)}`);
 
   status(name);
@@ -1424,8 +1511,10 @@ function endVisit() {
   tickVisit();
   const v = visit;
   visit = null;
+  const seen = coverage && coverage.project === v.project && coverage.image === v.image
+    ? { seen: Math.round(seenFraction() * 1000) / 1000 } : {};
   logEvent("image.visit",
-           { active_ms: Math.round(v.active), wall_ms: Date.now() - v.started },
+           { active_ms: Math.round(v.active), wall_ms: Date.now() - v.started, ...seen },
            { project: v.project, image: v.image });
 }
 
@@ -1554,7 +1643,9 @@ function clearHistories() {
 // settings file (see loadSettings); the dispatcher, the help overlay and the
 // settings dialog all read the same resolved tables.
 //
-// `screen`: where it is active - a view, or "global" for every view.
+// `screen`: where it is active - "dataset" (the image grid), "editor", or
+//           "project" for both. The project list has no shortcuts: settings
+//           are opened from inside a project, where they apply.
 // `kind`:   "press" (default) runs once per press;
 //           "hold"   runs with true on press and false on release;
 //           "drag"   starts a drag with a mouse button, ended by releasing it;
@@ -1562,10 +1653,10 @@ function clearHistories() {
 //                    distance of every event instead of whole steps, so a
 //                    trackpad zooms smoothly instead of in jumps.
 
-const SCREENS = { global: "Everywhere", dataset: "Image grid", editor: "Editor" };
+const SCREENS = { project: "Anywhere in a project", dataset: "Image grid", editor: "Editor" };
 
 const COMMANDS = {
-  "keys.open":         { screen: "global", label: "Open settings",
+  "keys.open":         { screen: "project", label: "Open settings",
                          keys: ["k"], run: () => toggleKeys() },
 
   "grid.search":       { screen: "dataset", label: "Filter by file name",
@@ -1589,7 +1680,7 @@ const COMMANDS = {
                          keys: ["d"], repeat: true, run: () => go(idx + 1) },
   "nav.grid":          { screen: "editor", group: "Navigate", label: "Back to the grid",
                          keys: ["g"], run: () => backToGrid() },
-  "nav.escape":        { screen: "editor", group: "Navigate", label: "Deselect, then back to the grid",
+  "nav.escape":        { screen: "editor", group: "Navigate", label: "Cancel a box, deselect, then back to the grid",
                          keys: ["Escape"], run: () => escapeKey() },
 
   "edit.undo":         { screen: "editor", group: "Edit", label: "Undo",
@@ -1615,17 +1706,22 @@ const COMMANDS = {
                          keys: ["h"], run: () => toggleBoxes() },
   "view.peek":         { screen: "editor", group: "View", label: "Hide all boxes while held",
                          kind: "hold", keys: [], run: (down) => peek(down) },
+  "view.minimap":      { screen: "editor", group: "View", label: "Show or hide the minimap",
+                         keys: ["m"], run: () => toggleMinimap() },
   "view.help":         { screen: "editor", group: "View", label: "Show or hide the help",
                          keys: ["?"], run: () => toggleHelp() },
 };
 
 // ---------------------------------------------------------------- settings
 
-const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1 };
+const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1, draw: "clicks" };
+const MINIMAP_DEFAULTS = { show: true, size: 220, opacity: 0.85, right: 12, top: 12,
+                           seen_s: 1.5, min_zoom: 2 };
 const WHEEL_NOTCH = 100;     // px one mouse-wheel notch reports, roughly
 const ZOOM_PER_NOTCH = 1.18; // at zoom speed 1: one notch or key press = 18 %
 
-let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS }, styles: {} };
+let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS }, styles: {},
+              minimap: { ...MINIMAP_DEFAULTS } };
 let prefsPath = "";          // where the server keeps them, for display
 
 // ---------------------------------------------------------------- input names
@@ -1729,9 +1825,9 @@ const isChanged = (id) => Object.prototype.hasOwnProperty.call(prefs.bindings, i
 const keysOf = (id) => (isChanged(id) ? prefs.bindings[id] : defaultsOf(id));
 const activeKeys = (id) => keysOf(id).filter((k) => ownerOf(COMMANDS[id].screen, k) === id);
 
-/** The screens an input on `screen` competes with: its own and the global
-    one. A global input competes with every screen. */
-const rivals = (screen) => (screen === "global" ? Object.keys(SCREENS) : [screen, "global"]);
+/** The screens an input on `screen` competes with: its own and "project".
+    A "project" input competes with every screen. */
+const rivals = (screen) => (screen === "project" ? Object.keys(SCREENS) : [screen, "project"]);
 
 function ownerOf(screen, input) {
   for (const s of rivals(screen)) {
@@ -1770,7 +1866,8 @@ function buildTables() {
 }
 
 function commandFor(input) {
-  return (tables[view] && tables[view].get(input)) || tables.global.get(input) || null;
+  if (view !== "dataset" && view !== "editor") return null;   // the project list
+  return tables[view].get(input) || tables.project.get(input) || null;
 }
 
 /** Store a command's inputs as an override - or drop the override when the
@@ -1810,7 +1907,8 @@ function releaseAll() {
 
 /** Clicks and the wheel act on the image only. Everywhere else - buttons,
     lists, the grid - they keep doing what they always do. */
-const overImage = (e) => view === "editor" && !!natW && el.viewport.contains(e.target);
+const overImage = (e) => view === "editor" && !!natW && el.viewport.contains(e.target)
+  && !(e.target.closest && e.target.closest(".minimap"));
 
 function pointerCtx(e) {
   const r = el.viewport.getBoundingClientRect();
@@ -1923,7 +2021,7 @@ function renderHelp() {
   const frag = document.createDocumentFragment();
   for (const id of Object.keys(COMMANDS)) {
     const c = COMMANDS[id];
-    if (c.screen !== "editor" && c.screen !== "global") continue;
+    if (c.screen !== "editor" && c.screen !== "project") continue;
     const inputs = [...tables[c.screen]].filter(([, v]) => v === id).map(([k]) => k);
     if (!inputs.length) continue;
     const keys = h("span", "keys");
@@ -1934,8 +2032,10 @@ function renderHelp() {
     frag.append(keys, h("span", "", c.label + (c.kind === "hold" ? " (hold)" : "")));
   }
   el.helpKeys.replaceChildren(frag);
-  el.helpMouse.textContent =
-    "Drawing: drag on empty space for a new box, on a box to move it, on a corner to resize.";
+  el.helpMouse.textContent = prefs.pointer.draw === "drag"
+    ? "Drawing: drag on empty space for a new box, on a box to move it, on a corner to resize."
+    : "Drawing: click on empty space to start a box and click again to finish it (esc cancels). "
+      + "Drag a box to move it, a corner to resize it.";
 }
 
 const K_HELP = "al.help";
@@ -1964,6 +2064,7 @@ let keysReturnFocus = null;
 
 function toggleKeys() {
   if (el.keysDialog.open) { el.keysDialog.close(); return; }
+  if (view !== "dataset" && view !== "editor") return;   // settings live in a project
   keysReturnFocus = document.activeElement;
   releaseAll();
   capture = null;
@@ -2116,9 +2217,11 @@ el.setTabs.addEventListener("click", (e) => {
 el.keysFilter.addEventListener("input", () => { capture = null; renderKeys(); });
 el.keysResetAll.addEventListener("click", () => {
   if (settingsTab === "appearance") {
-    if (!window.confirm("Reset every box, cursor and crosshair style to the defaults? "
-                        + "Class names are kept.")) return;
+    if (!window.confirm("Reset every box, cursor, crosshair and minimap setting to the "
+                        + "defaults? Class names are kept.")) return;
     prefs.styles = {};
+    prefs.minimap = { ...MINIMAP_DEFAULTS };
+    mmBase = null;
     for (const id of Object.keys(projectPrefs.classes)) setClass(Number(id), { style: undefined });
     saveSettings();
     if (project) saveProjectSettings();
@@ -2308,8 +2411,36 @@ function speedSection() {
     speedRow("pan_gain", "Pan speed",
              "How far the image moves when you drag it. At 1\u00d7 it stays under the cursor."),
     speedRow("zoom_speed", "Zoom speed",
-             "How much one wheel notch, or one zoom key press, zooms in or out."));
+             "How much one wheel notch, or one zoom key press, zooms in or out."),
+    drawModeRow());
   return sec;
+}
+
+function drawModeRow() {
+  const changed = prefs.pointer.draw !== POINTER_DEFAULTS.draw;
+  const row = h("div", "keyrow speed" + (changed ? " changed" : ""));
+  const lab = h("span", "keylabel");
+  lab.append("Drawing a new box",
+             h("span", "sub", "Either way, panning and zooming in the middle of a box leave it open."));
+  const opts = h("span", "chips");
+  for (const [value, text] of [["clicks", "two clicks"], ["drag", "press, drag, release"]]) {
+    const l = h("label", "radio");
+    const r = h("input");
+    r.type = "radio";
+    r.name = "drawmode";
+    r.value = value;
+    r.checked = prefs.pointer.draw === value;
+    r.dataset.f = `draw:${value}`;
+    r.addEventListener("change", () => {
+      prefs.pointer.draw = value;
+      draft = null;              // a box half-drawn the other way is abandoned
+      saveSettings();
+    });
+    l.append(r, " " + text);
+    opts.appendChild(l);
+  }
+  row.append(lab, opts, h("span", "keyactions"));
+  return row;
 }
 
 function speedRow(key, label, hint) {
@@ -2395,6 +2526,7 @@ async function loadSettings() {
       bindings: data.bindings || {},
       pointer: { ...POINTER_DEFAULTS, ...(data.pointer || {}) },
       styles: data.styles || {},
+      minimap: { ...MINIMAP_DEFAULTS, ...(data.minimap || {}) },
     };
     prefsPath = data.path || "";
     const msg = data.warning || data.note || (prefsPath ? `Saved to ${prefsPath}` : "");
@@ -2495,6 +2627,7 @@ function applyAppearance() {
   render();
   renderLegend();
   drawPointer();
+  scheduleMinimap();
 }
 
 // ---------------------------------------------------------------- cursor and crosshair
@@ -2547,7 +2680,9 @@ window.addEventListener("mousemove", (e) => {
   const r = el.viewport.getBoundingClientRect();
   const x = e.clientX - r.left, y = e.clientY - r.top;
   const inside = x >= 0 && y >= 0 && x < r.width && y < r.height;
-  pointerAt = inside || drag || draft || panning ? { x, y } : null;
+  // Over the minimap there is nothing to aim at: no lines through it.
+  const overMap = !!(e.target.closest && e.target.closest(".minimap")) || !!mmDrag || mmNav;
+  pointerAt = !overMap && (inside || drag || draft || panning) ? { x, y } : null;
   schedulePointer();
 }, { passive: true });
 
@@ -2824,6 +2959,7 @@ function renderAppearance() {
     personal("cursor", "cursor", "Cursor", { showLabel: "Draw this cursor over the image" }),
     personal("crosshair", "line", "Crosshair lines", { showLabel: "Show lines through the cursor" }));
   frag.appendChild(pointer);
+  frag.appendChild(minimapSection());
 
   el.keysList.replaceChildren(frag);
 }
@@ -2832,8 +2968,429 @@ function renderAppearance() {
     project's class styles (names are not "changes from the defaults"). */
 function appearanceChangeCount() {
   return Object.keys(STYLE_DEFAULTS).filter((k) => prefs.styles[k]).length
-    + Object.values(projectPrefs.classes).filter((c) => c.style).length;
+    + Object.values(projectPrefs.classes).filter((c) => c.style).length
+    + minimapChangeCount();
 }
+
+// ---------------------------------------------------------------- minimap
+//
+// The whole image in a small window over the view: a rectangle for the part
+// on screen, a colour for how long each part has been looked at, and a dot
+// for each of your boxes in its class colour. Drag it by its top-right
+// corner; press or drag on it to move the view there.
+//
+// "Looked at" is counted on a coarse grid, per cell, while the cell's centre
+// is on screen, the view is zoomed in at least min_zoom times the fit zoom,
+// and the annotator is active by the same rule as the timer (tab visible,
+// input within IDLE_MS). A cell counts as seen after seen_s seconds in total.
+// Counts are kept on the server, so a pass can span several visits.
+
+const COVERAGE_CELLS = 40;           // cells along the image's longer side
+const COVERAGE_TICK_MS = 250;
+
+let coverage = null;                 // {project, image, gw, gh, ms} on screen
+const coveragePending = new Map();   // project + "\0" + image -> unsent delta
+let coverageInFlight = [];
+let coverageFlushing = null;
+
+let mmFrame = 0;
+let mmBase = null;                   // the image, drawn once at minimap size
+let mmDrag = null;                   // moving the minimap by its grip
+let mmNav = false;                   // moving the view by pressing on the map
+
+function coverageDims(w, h) {
+  const long = Math.max(w, h);
+  return { gw: Math.max(1, Math.round(COVERAGE_CELLS * w / long)),
+           gh: Math.max(1, Math.round(COVERAGE_CELLS * h / long)) };
+}
+const coverageKey = (p, name) => p + "\u0000" + name;
+
+/** Coverage for the image just loaded: what the server has, plus what this
+    tab has counted but not yet sent (or sent without an answer yet). */
+function startCoverage(name, stored) {
+  const { gw, gh } = coverageDims(natW, natH);
+  const ms = new Float64Array(gw * gh);
+  const add = (src) => {
+    if (src && src.gw === gw && src.gh === gh && src.ms.length === ms.length) {
+      for (let i = 0; i < ms.length; i++) ms[i] += src.ms[i];
+    }
+  };
+  add(stored);
+  const key = coverageKey(project, name);
+  add(coveragePending.get(key));
+  for (const d of coverageInFlight) if (coverageKey(d.project, d.image) === key) add(d);
+  coverage = { project, image: name, gw, gh, ms };
+  scheduleMinimap();
+}
+
+function pendingDelta(cov) {
+  const key = coverageKey(cov.project, cov.image);
+  let d = coveragePending.get(key);
+  if (!d || d.gw !== cov.gw || d.gh !== cov.gh) {
+    d = { project: cov.project, image: cov.image, gw: cov.gw, gh: cov.gh,
+          ms: new Float64Array(cov.gw * cov.gh) };
+    coveragePending.set(key, d);
+  }
+  return d;
+}
+
+/** The part of the image on screen, in image pixels, or null. */
+function visibleRect() {
+  const s = scale();
+  const W = el.viewport.clientWidth, H = el.viewport.clientHeight;
+  const x1 = Math.max(0, -panX / s), y1 = Math.max(0, -panY / s);
+  const x2 = Math.min(natW, (W - panX) / s), y2 = Math.min(natH, (H - panY) / s);
+  return x2 > x1 && y2 > y1 ? { x1, y1, x2, y2 } : null;
+}
+
+const counting = () => zoom >= prefs.minimap.min_zoom;
+
+let coverageLast = Date.now();
+setInterval(() => {
+  const t = Date.now();
+  const dt = Math.min(t - coverageLast, 2 * COVERAGE_TICK_MS);  // a throttled tab banks nothing
+  coverageLast = t;
+  if (!coverage || view !== "editor" || !natW || el.keysDialog.open
+      || document.visibilityState !== "visible" || t - lastInput >= IDLE_MS) return;
+  if (!counting()) return;
+  const r = visibleRect();
+  if (!r) return;
+  const { gw, gh, ms } = coverage;
+  const cw = natW / gw, ch = natH / gh;
+  // Cells whose centre is on screen: centre = (i + .5) * cw.
+  const i0 = Math.max(0, Math.ceil(r.x1 / cw - 0.5)), i1 = Math.min(gw - 1, Math.floor(r.x2 / cw - 0.5));
+  const j0 = Math.max(0, Math.ceil(r.y1 / ch - 0.5)), j1 = Math.min(gh - 1, Math.floor(r.y2 / ch - 0.5));
+  if (i1 < i0 || j1 < j0) return;
+  const d = pendingDelta(coverage);
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
+      ms[j * gw + i] += dt;
+      d.ms[j * gw + i] += dt;
+    }
+  }
+  scheduleMinimap();
+}, COVERAGE_TICK_MS);
+
+function seenFraction(cov = coverage) {
+  if (!cov) return 0;
+  const need = prefs.minimap.seen_s * 1000;
+  let n = 0;
+  for (const v of cov.ms) if (v >= need) n++;
+  return n / cov.ms.length;
+}
+
+const coverageUrl = (d) =>
+  BASE + `api/coverage/${encodeURIComponent(d.image)}?` + new URLSearchParams({ project: d.project });
+const coverageBody = (d) =>
+  JSON.stringify({ gw: d.gw, gh: d.gh, ms: Array.from(d.ms, (v) => Math.round(v)) });
+
+/** Send what has been counted. Same rules as the event log: a delta the
+    server refuses is dropped, one that got no answer goes back in the queue. */
+function flushCoverage() {
+  if (coverageFlushing || !coveragePending.size) return coverageFlushing || Promise.resolve();
+  coverageInFlight = [...coveragePending.values()];
+  coveragePending.clear();
+  coverageFlushing = (async () => {
+    for (const d of coverageInFlight) {
+      try {
+        const r = await fetch(coverageUrl(d), {
+          method: "POST", headers: { "Content-Type": "application/json" }, body: coverageBody(d),
+        });
+        if (r.status >= 400 && r.status < 500) {
+          console.warn(`coverage for ${d.image} refused (${r.status}):`, await r.text());
+        } else if (!r.ok) {
+          throw new Error(String(r.status));
+        }
+      } catch (err) {
+        const back = pendingDelta({ ...d });
+        for (let i = 0; i < back.ms.length; i++) back.ms[i] += d.ms[i];
+      }
+    }
+    coverageInFlight = [];
+  })().finally(() => { coverageFlushing = null; });
+  return coverageFlushing;
+}
+
+setInterval(flushCoverage, EVENT_FLUSH_MS);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") flushCoverage();
+});
+window.addEventListener("pagehide", () => {
+  for (const d of coveragePending.values()) {
+    navigator.sendBeacon(coverageUrl(d), new Blob([coverageBody(d)], { type: "application/json" }));
+  }
+  coveragePending.clear();
+});
+
+// ---------------------------------------------------------------- drawing
+
+function scheduleMinimap() {
+  if (!mmFrame) mmFrame = requestAnimationFrame(drawMinimap);
+}
+
+/** Width from the size setting, height from the image; a tall image must not
+    make the minimap taller than the view. */
+function mmSize() {
+  const w = prefs.minimap.size;
+  const h = Math.round(w * natH / natW);
+  const maxH = Math.max(60, el.viewport.clientHeight - 60);
+  return h > maxH ? { w: Math.round(w * maxH / h), h: maxH } : { w, h };
+}
+
+function buildMinimapBase() {
+  mmBase = null;
+  if (!natW || !el.photo.complete || !el.photo.naturalWidth) return;
+  const { w, h } = mmSize();
+  const dpr = window.devicePixelRatio || 1;
+  const c = document.createElement("canvas");
+  c.width = Math.round(w * dpr);
+  c.height = Math.round(h * dpr);
+  c.getContext("2d").drawImage(el.photo, 0, 0, c.width, c.height);
+  mmBase = c;
+}
+el.photo.addEventListener("load", () => { buildMinimapBase(); scheduleMinimap(); });
+
+/** Never seen: a dark veil, so what is left stands out. Then amber, turning
+    green as the time approaches "seen" - the ribbon's colour for done. */
+function heat(t) {
+  const a = [255, 176, 31], b = [75, 214, 164];
+  const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${t >= 1 ? 0.38 : 0.5})`;
+}
+
+function placeMinimap() {
+  const W = el.viewport.clientWidth, H = el.viewport.clientHeight;
+  const m = prefs.minimap;
+  const right = clamp(m.right, 0, Math.max(0, W - el.minimap.offsetWidth));
+  const top = clamp(m.top, 0, Math.max(0, H - el.minimap.offsetHeight));
+  el.minimap.style.right = right + "px";
+  el.minimap.style.top = top + "px";
+  return { right, top };
+}
+
+function drawMinimap() {
+  mmFrame = 0;
+  const m = prefs.minimap;
+  const show = m.show && view === "editor" && !!natW;
+  el.minimap.hidden = !show;
+  if (!show) return;
+
+  const { w, h } = mmSize();
+  const dpr = window.devicePixelRatio || 1;
+  const c = el.mmCanvas;
+  if (c.width !== Math.round(w * dpr) || c.height !== Math.round(h * dpr)) {
+    c.width = Math.round(w * dpr);
+    c.height = Math.round(h * dpr);
+    c.style.width = w + "px";
+    c.style.height = h + "px";
+  }
+  el.minimap.style.opacity = m.opacity;
+  placeMinimap();
+
+  if (!mmBase || mmBase.width !== c.width || mmBase.height !== c.height) buildMinimapBase();
+  const g = c.getContext("2d");
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  if (mmBase) g.drawImage(mmBase, 0, 0, w, h);
+  else { g.fillStyle = "#1b1f25"; g.fillRect(0, 0, w, h); }
+
+  if (coverage) {
+    const need = m.seen_s * 1000;
+    const { gw, gh, ms } = coverage;
+    for (let j = 0; j < gh; j++) {
+      const y0 = Math.floor(j * h / gh), y1 = Math.floor((j + 1) * h / gh);
+      for (let i = 0; i < gw; i++) {
+        const v = ms[j * gw + i];
+        const x0 = Math.floor(i * w / gw), x1 = Math.floor((i + 1) * w / gw);
+        g.fillStyle = v > 0 ? heat(Math.min(1, v / need)) : "rgba(8, 10, 12, 0.5)";
+        g.fillRect(x0, y0, x1 - x0, y1 - y0);
+      }
+    }
+  }
+
+  // Your boxes, one dot each, in the colour of their class.
+  const sx = w / natW, sy = h / natH;
+  for (const b of boxes) {
+    g.beginPath();
+    g.arc((b.x1 + b.x2) / 2 * sx, (b.y1 + b.y2) / 2 * sy, 2.6, 0, 2 * Math.PI);
+    g.fillStyle = classStyle(b.cls || 0).color;
+    g.fill();
+    g.lineWidth = 1;
+    g.strokeStyle = "rgba(8, 10, 12, 0.85)";
+    g.stroke();
+  }
+
+  // Where the view is: a light frame with a dark rim, to read on any image.
+  const r = visibleRect();
+  if (r) {
+    const x = r.x1 * sx, y = r.y1 * sy, rw = (r.x2 - r.x1) * sx, rh = (r.y2 - r.y1) * sy;
+    g.lineWidth = 3;
+    g.strokeStyle = "rgba(8, 10, 12, 0.7)";
+    g.strokeRect(x, y, rw, rh);
+    g.lineWidth = 1.5;
+    g.strokeStyle = "#ffffff";
+    g.strokeRect(x, y, rw, rh);
+  }
+
+  el.mmZoom.textContent = `${Math.round(scale() * 100)} %`;
+  el.mmZoom.title = `${Math.round(scale() * 100)} % of the image's pixels, ${zoom.toFixed(1)}\u00d7 the fit-to-screen zoom`;
+  if (coverage) {
+    const pctSeen = Math.round(seenFraction() * 100);
+    el.mmSeen.textContent = counting() ? `${pctSeen} % seen` : `${pctSeen} % seen, zoom in to count`;
+    el.mmSeen.classList.toggle("paused", !counting());
+    el.mmSeen.title = `Parts looked at for ${m.seen_s} s or more, counted from `
+      + `${m.min_zoom}\u00d7 the fit zoom. Dark: not looked at yet.`;
+  } else {
+    el.mmSeen.textContent = "";
+  }
+}
+
+window.addEventListener("resize", () => { mmBase = null; scheduleMinimap(); });
+
+// ---------------------------------------------------------------- moving it, and moving the view with it
+
+el.mmGrip.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const { right, top } = placeMinimap();
+  mmDrag = { x: e.clientX, y: e.clientY, right, top };
+  el.minimap.classList.add("moving");
+});
+
+/** Centre the view on the image point under the pointer. */
+function mmJump(e) {
+  const r = el.mmCanvas.getBoundingClientRect();
+  const ix = clamp((e.clientX - r.left) / r.width, 0, 1) * natW;
+  const iy = clamp((e.clientY - r.top) / r.height, 0, 1) * natH;
+  const s = scale();
+  panX = el.viewport.clientWidth / 2 - ix * s;
+  panY = el.viewport.clientHeight / 2 - iy * s;
+  applyTransform();
+  render();
+}
+
+el.mmCanvas.addEventListener("mousedown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  mmNav = true;
+  mmJump(e);
+});
+
+// The minimap is not the image: no wheel zoom of the page through it either.
+el.minimap.addEventListener("wheel", (e) => e.preventDefault(), { passive: false });
+
+window.addEventListener("mousemove", (e) => {
+  if (mmDrag) {
+    prefs.minimap.right = Math.max(0, mmDrag.right - (e.clientX - mmDrag.x));
+    prefs.minimap.top = Math.max(0, mmDrag.top + (e.clientY - mmDrag.y));
+    const { right, top } = placeMinimap();
+    prefs.minimap.right = right;
+    prefs.minimap.top = top;
+  } else if (mmNav) {
+    mmJump(e);
+  }
+});
+
+window.addEventListener("mouseup", (e) => {
+  if (e.button !== 0) return;
+  if (mmDrag) {
+    mmDrag = null;
+    el.minimap.classList.remove("moving");
+    saveSettings();              // the place is personal, and kept
+  }
+  mmNav = false;
+});
+
+function toggleMinimap() {
+  prefs.minimap.show = !prefs.minimap.show;
+  saveSettings();
+  flash(prefs.minimap.show ? "Minimap shown" : "Minimap hidden: m shows it");
+}
+
+// ---------------------------------------------------------------- settings section
+
+function minimapSection() {
+  const m = prefs.minimap;
+  const sec = h("section", "keys-screen");
+  sec.append(h("h3", "", "Minimap"),
+    h("p", "keyhint", "Drag it by its top-right corner; press or drag on it to move the view. "
+      + "Dark parts have not been looked at yet; amber turns green as they get looked at "
+      + "for long enough. Dots are your boxes, in their class colour. m shows or hides it."));
+
+  const toggle = h("label", "stylefield toggle mmtoggle");
+  const c = h("input");
+  c.type = "checkbox";
+  c.checked = m.show;
+  c.dataset.f = "mm:show";
+  c.addEventListener("change", () => { m.show = c.checked; saveSettings(); });
+  toggle.append(c, h("span", "", "Show the minimap"));
+  sec.appendChild(toggle);
+
+  const row = (key, label, hint, min, max, step, fmt) => {
+    const changed = m[key] !== MINIMAP_DEFAULTS[key];
+    const r = h("div", "keyrow speed" + (changed ? " changed" : ""));
+    const lab = h("label", "keylabel");
+    lab.htmlFor = `mm-${key}`;
+    lab.append(label, h("span", "sub", hint));
+    const wrap = h("span", "chips");
+    const input = h("input");
+    input.type = "range"; input.id = `mm-${key}`;
+    input.min = min; input.max = max; input.step = step;
+    input.value = String(m[key]);
+    input.dataset.f = `mm:${key}`;
+    const out = h("output", "speedval", fmt(m[key]));
+    input.addEventListener("input", () => {
+      m[key] = Math.round(Number(input.value) * 100) / 100;
+      out.textContent = fmt(m[key]);
+      if (key === "size") mmBase = null;
+      scheduleMinimap();
+    });
+    input.addEventListener("change", () => saveSettings());
+    wrap.append(input, out);
+    const actions = h("span", "keyactions");
+    if (changed) {
+      const reset = h("button", "badge", "reset");
+      reset.type = "button";
+      reset.dataset.f = `mm:${key}:reset`;
+      reset.addEventListener("click", () => {
+        m[key] = MINIMAP_DEFAULTS[key];
+        if (key === "size") mmBase = null;
+        saveSettings();
+      });
+      actions.appendChild(reset);
+    }
+    r.append(lab, wrap, actions);
+    return r;
+  };
+  sec.append(
+    row("size", "Size", "Width on screen.", 100, 480, 10, (v) => `${v} px`),
+    row("opacity", "Opacity", "Of the whole minimap.", 0.2, 1, 0.05, (v) => `${Math.round(v * 100)} %`),
+    row("seen_s", "Seen after", "Time a part must be on screen, in total, to count as seen.",
+        0.5, 10, 0.5, (v) => `${v} s`),
+    row("min_zoom", "Counted from zoom",
+        "Looking at the whole image at once is not scanning it, so time only counts "
+        + "from this much zoom, in times the fit-to-screen zoom.",
+        1, 8, 0.5, (v) => `${v}\u00d7`));
+
+  const moved = m.right !== MINIMAP_DEFAULTS.right || m.top !== MINIMAP_DEFAULTS.top;
+  if (moved) {
+    const put = h("button", "badge", "put it back in the top-right corner");
+    put.type = "button";
+    put.dataset.f = "mm:place";
+    put.addEventListener("click", () => {
+      m.right = MINIMAP_DEFAULTS.right;
+      m.top = MINIMAP_DEFAULTS.top;
+      saveSettings();
+    });
+    const p = h("p", "keyhint");
+    p.appendChild(put);
+    sec.appendChild(p);
+  }
+  return sec;
+}
+
+const minimapChangeCount = () =>
+  Object.keys(MINIMAP_DEFAULTS).filter((k) => prefs.minimap[k] !== MINIMAP_DEFAULTS[k]).length;
 
 // ---------------------------------------------------------------- small commands
 
@@ -2848,6 +3405,7 @@ function zoomBy(factor, cx, cy) {
   panY = cy - (cy - panY) * (after / before);
   applyTransform();
   render();
+  followPointer();
 }
 
 let boxesHidden = false;
@@ -2873,6 +3431,7 @@ function toggleMode() {
 }
 
 function escapeKey() {
+  if (draft) { draft = null; render(); flash("Box cancelled"); return; }
   if (sel) { sel = null; render(); } else backToGrid();
 }
 
@@ -3019,6 +3578,8 @@ function parseHash() {
 
 function showView(name) {
   releaseAll();
+  // Settings belong to the project open; they have no business on the list.
+  if (name === "projects" && el.keysDialog.open) el.keysDialog.close();
   if (view === "editor" && name !== "editor") endVisit();
   view = name;
   for (const v of ["projects", "dataset", "editor"]) el[v + "View"].hidden = v !== name;

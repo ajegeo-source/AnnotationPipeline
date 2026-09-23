@@ -79,6 +79,12 @@ and live in $XDG_CONFIG_HOME/weedloop/settings.json (normally
 ~/.config/weedloop/). Bindings are stored only where they differ from the
 defaults, which are defined in the client next to the commands themselves.
 
+Coverage (<project>/coverage/<stem>.json): how long each part of an image
+has been looked at, as milliseconds per cell of a coarse grid over it. The
+browser counts while the view is zoomed in far enough and the annotator is
+active, and sends what it counted; the server adds it up. This is what the
+minimap colours, and what "a full pass was done" can later be checked against.
+
 Completion flags (one file per image, in <project>/flags/): a single character,
 0 or 1. 1 means "every instance in this image is boxed" - so an image with flag
 1 and zero boxes is a confirmed negative, which is a useful training example.
@@ -634,6 +640,54 @@ class EventLog:
         self._active[r["image"]] = self._active.get(r["image"], 0) + max(ms, 0)
 
 
+# --------------------------------------------------------------------------
+# Coverage. See the module docstring.
+# --------------------------------------------------------------------------
+
+MAX_COVERAGE_CELLS = 128             # per side
+MAX_CELL_MS = 24 * 3600 * 1000
+
+
+class CoverageDelta(BaseModel):
+    """Milliseconds looked at, per cell, since the browser last sent any."""
+
+    gw: int = Field(ge=1, le=MAX_COVERAGE_CELLS)
+    gh: int = Field(ge=1, le=MAX_COVERAGE_CELLS)
+    ms: list[float]
+
+    @model_validator(mode="after")
+    def _shape(self) -> "CoverageDelta":
+        if len(self.ms) != self.gw * self.gh:
+            raise ValueError(f"{len(self.ms)} cells for a {self.gw} x {self.gh} grid")
+        if any(not 0 <= v <= MAX_CELL_MS for v in self.ms):
+            raise ValueError("cell times must be between 0 and 24 h")
+        return self
+
+
+def coverage_path(project: Project, name: str) -> Path:
+    return project.annotations_dir.parent / "coverage" / (Path(name).stem + ".json")
+
+
+def read_coverage(project: Project, name: str) -> dict | None:
+    """The stored grid, or None. A damaged file reads as no coverage rather
+    than as an error: it is a record of attention, not of labels."""
+    path = coverage_path(project, name)
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        gw, gh, ms = int(data["gw"]), int(data["gh"]), data["ms"]
+        if len(ms) != gw * gh:
+            raise ValueError("cell count does not match the grid")
+        return {"gw": gw, "gh": gh, "ms": [float(v) for v in ms]}
+    except (ValueError, KeyError, TypeError, OSError) as exc:
+        print(f"  ignoring {path.name}: {exc}")
+        return None
+
+
+_coverage_lock = threading.Lock()
+
+
 _event_logs: dict[str, EventLog] = {}
 _event_logs_lock = threading.Lock()
 
@@ -701,11 +755,28 @@ def display_path(p: Path) -> str:
 
 
 class PointerSettings(BaseModel):
-    """How far the image moves per pixel of drag, and how much one wheel
-    notch zooms. Both are multipliers of the built-in behaviour."""
+    """How far the image moves per pixel of drag and how much one wheel notch
+    zooms (multipliers of the built-in behaviour), and how boxes are drawn."""
 
     pan_gain: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)
     zoom_speed: float = Field(default=1.0, ge=SPEED_MIN, le=SPEED_MAX)
+    # "clicks": click to start a box, click again to finish it, no button held
+    # in between. "drag": press, drag, release.
+    draw: Literal["clicks", "drag"] = "clicks"
+
+
+class MinimapSettings(BaseModel):
+    """The minimap's look and place, and what counts as having looked at a
+    part of the image: at least `min_zoom` times the fit-to-screen zoom, for
+    `seen_s` seconds in total."""
+
+    show: bool = True
+    size: int = Field(default=220, ge=100, le=480)          # width, screen px
+    opacity: float = Field(default=0.85, ge=0.2, le=1.0)
+    right: float = Field(default=12, ge=0, le=10000)        # top-right corner, px
+    top: float = Field(default=12, ge=0, le=10000)          # from the view's
+    seen_s: float = Field(default=1.5, ge=0.5, le=10)
+    min_zoom: float = Field(default=2.0, ge=1.0, le=8.0)
 
 
 class PersonalSettings(BaseModel):
@@ -723,6 +794,7 @@ class PersonalSettings(BaseModel):
     bindings: dict[str, list[str]] = Field(default_factory=dict)
     pointer: PointerSettings = Field(default_factory=PointerSettings)
     styles: "PersonalStyles" = Field(default_factory=lambda: PersonalStyles())
+    minimap: MinimapSettings = Field(default_factory=MinimapSettings)
 
     @field_validator("version")
     @classmethod
@@ -1182,6 +1254,7 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "exemplars": exemplar_boxes(project, run, name),
         "complete": read_flag(project, name),
         "active_ms": event_log(project).active_ms(name),
+        "coverage": read_coverage(project, name),
     }
 
 
@@ -1194,6 +1267,28 @@ def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> di
     write_flag(project, name, annotation.complete)
     note_classes(project, annotation.boxes)
     return {"saved": len(annotation.boxes)}
+
+
+@app.post("/api/coverage/{name}")
+def post_coverage(project: ProjectDep, name: str, delta: CoverageDelta) -> dict:
+    """Add a batch of looked-at time to an image's grid. A stored grid of
+    another shape is replaced rather than mixed with - its cells would not
+    mean the same parts of the image."""
+    image_path(project, name)                   # validates the name
+    path = coverage_path(project, name)
+    with _coverage_lock:
+        cur = read_coverage(project, name)
+        if cur and cur["gw"] == delta.gw and cur["gh"] == delta.gh:
+            ms = [min(a + b, MAX_CELL_MS) for a, b in zip(cur["ms"], delta.ms)]
+        else:
+            ms = list(delta.ms)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps({"gw": delta.gw, "gh": delta.gh,
+                                   "ms": [round(v) for v in ms]},
+                                  separators=(",", ":")), encoding="utf-8")
+        tmp.replace(path)
+    return {"cells": len(ms)}
 
 
 @app.post("/api/events")
