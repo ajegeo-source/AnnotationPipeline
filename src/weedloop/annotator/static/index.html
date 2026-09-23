@@ -117,28 +117,10 @@
     fill: transparent; stroke-width: 2px; pointer-events: none;
     vector-effect: non-scaling-stroke;
   }
-  .stage rect.human  { stroke: var(--human); }
-  .stage rect.pred   { stroke: var(--pred); }
-  .stage rect.accept {
-    stroke: var(--accept); stroke-dasharray: 1 9; stroke-linecap: round;
-  }
-  .stage rect.draft  { stroke: var(--human); stroke-dasharray: 3 3; }
-  .stage rect.exem {
-    stroke: var(--exem); fill: rgba(255, 176, 31, .10);
-  }
-  .stage rect.draft.exem { stroke: var(--exem); fill: transparent; }
-
-  /* Selection is a wash of the box's own colour - the stroke pattern is what
-     tells you where a box came from, so selection must not touch it. */
-  .stage rect.human.sel  { fill: rgba(168, 85, 247, .16); }
-  .stage rect.pred.sel   { fill: rgba(255, 45,  45, .14); }
-  .stage rect.accept.sel { fill: rgba( 92, 200, 255, .14); }
-  .stage rect.exem.sel   { fill: rgba(255, 176,  31, .26); }
-
+  /* Colour, width, opacity, fill and dash come from the style settings and
+     are set inline on each box (see paint()); only the handles' dark rim is
+     fixed, so a corner stays visible on a box of any colour. */
   .stage rect.handle { stroke: #0d0f12; stroke-width: 1px; }
-  .stage rect.handle.human  { fill: var(--human); }
-  .stage rect.handle.pred   { fill: var(--pred); }
-  .stage rect.handle.accept { fill: var(--accept); }
 
   .hint {
     position: absolute; left: 12px; bottom: 12px;
@@ -246,6 +228,38 @@
   .keys-body .empty { padding: 30px 0; }
   .badge:focus-visible, .chip-key button:focus-visible, .add-key:focus-visible,
   .radio input:focus-visible { outline: 2px solid var(--human); outline-offset: 2px; }
+
+  /* ------------------------------------------------ cursor, crosshair, styles */
+  .pointer-layer { position: absolute; inset: 0; width: 100%; height: 100%;
+                   pointer-events: none; overflow: visible; }
+  .viewport.custom-cursor:not(.panning) { cursor: none; }
+
+  .keys-head .tabs { flex: none; }
+  #keysClose { margin-left: auto; }
+  .stylerow { padding: 9px 8px 11px; border-radius: 2px; }
+  .stylerow + .stylerow { border-top: 1px solid rgba(255, 255, 255, .05); }
+  .stylehead { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+  .pvwrap { display: inline-flex; flex: none; }
+  .preview { display: block; border-radius: 2px; }
+  .stylectl { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px;
+              margin: 8px 0 0 68px; }
+  .stylefield { display: inline-flex; align-items: center; gap: 7px;
+                font-size: 12px; color: var(--dim); }
+  .stylefield input[type="range"] { width: 96px; accent-color: var(--human); }
+  .stylefield input[type="color"] {
+    width: 30px; height: 22px; padding: 0; cursor: pointer; background: none;
+    border: 1px solid var(--line); border-radius: 2px;
+  }
+  .stylefield.toggle { color: var(--text); flex-basis: 100%; }
+  .stylefield input:focus-visible, .stylefield select:focus-visible {
+    outline: 2px solid var(--human); outline-offset: 2px;
+  }
+  .styleval { min-width: 44px; font: 11px var(--mono); color: var(--text);
+              font-variant-numeric: tabular-nums; }
+  .classname { width: 220px; }
+  .classid { font: 11px var(--mono); color: var(--dim); }
+  .legend-item { display: inline-flex; align-items: center; gap: 5px;
+                 margin-right: 12px; white-space: nowrap; }
 
   .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -466,16 +480,17 @@
     <img id="photo" alt="">
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
+  <svg class="pointer-layer" id="pointerLayer" aria-hidden="true">
+    <line id="chV" visibility="hidden"></line>
+    <line id="chH" visibility="hidden"></line>
+    <line id="curV" visibility="hidden"></line>
+    <line id="curH" visibility="hidden"></line>
+  </svg>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="hint" id="hint">
     <div class="help-keys" id="helpKeys"></div>
     <div class="mouse" id="helpMouse"></div>
-    <div class="legend">
-      <span style="color:#a855f7">violet</span> yours &nbsp;
-      <span style="color:#ff2d2d">red</span> sam3 &nbsp;
-      <span style="color:#5cc8ff">blue dots</span> sam3 approved &nbsp;
-      <span style="color:#ffb01f">amber</span> exemplar
-    </div>
+    <div class="legend" id="helpLegend"></div>
   </div>
 </div>
 
@@ -485,6 +500,10 @@
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
   <div class="keys-head">
     <h2 id="keysTitle">Settings</h2>
+    <div class="tabs" id="setTabs" role="tablist" aria-label="Settings sections">
+      <button class="tab" role="tab" type="button" data-tab="appearance">Appearance</button>
+      <button class="tab" role="tab" type="button" data-tab="input">Mouse and keys</button>
+    </div>
     <input id="keysFilter" class="field" type="search" autocomplete="off" spellcheck="false"
            placeholder="Filter settings and shortcuts" aria-label="Filter settings and shortcuts">
     <button class="badge" id="keysClose" type="button">done</button>
@@ -614,6 +633,12 @@ const el = {
   keysChanged: document.getElementById("keysChanged"),
   keysResetAll: document.getElementById("keysResetAll"),
   keysClose: document.getElementById("keysClose"),
+  setTabs: document.getElementById("setTabs"),
+  helpLegend: document.getElementById("helpLegend"),
+  chV: document.getElementById("chV"),
+  chH: document.getElementById("chH"),
+  curV: document.getElementById("curV"),
+  curH: document.getElementById("curH"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -651,6 +676,11 @@ let panning = null;
 function panStart(e) {
   panning = { x: e.clientX, y: e.clientY, px: panX, py: panY };
   el.viewport.classList.add("panning");
+  // "Grabbing" says what is happening; the drawn cursor steps aside until the
+  // pointer next moves over the image.
+  el.svg.style.cursor = "grabbing";
+  overBox = true;
+  schedulePointer();
 }
 window.addEventListener("mousemove", (e) => {
   if (!panning) return;
@@ -669,6 +699,7 @@ window.addEventListener("mouseup", () => {
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 function normalise(b) {
+  if (!Number.isInteger(b.cls)) b.cls = 0;
   const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
   const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
   b.x1 = x1; b.x2 = x2; b.y1 = y1; b.y2 = y2;
@@ -691,12 +722,6 @@ const at = (s) => (s ? listOf(s.kind)[s.i] : null);
 const isSel = (kind, i) => !!sel && sel.kind === kind && sel.i === i;
 const shownPreds = () => preds.filter((b) => b.score >= threshold);
 const fromSam3 = (b) => b.provenance !== PROV_HUMAN;
-
-function classOf(kind, b) {
-  if (kind === "pred") return "pred";
-  if (kind === "exem") return "exem";
-  return fromSam3(b) ? "accept" : "human";
-}
 
 /** An exemplar has a twin in `boxes` - picking one writes an annotation too -
     so the twin is not drawn. The threshold is tight because the two are the
@@ -800,7 +825,16 @@ function pointerEditStart(e) {
 el.svg.addEventListener("mousemove", (e) => {
   if (drag || draft || panning) return;
   const hit = hitTest(toImage(e));
-  el.svg.style.cursor = hit ? CURSOR[hit.mode] : "crosshair";
+  // Over a box or a corner the system cursor shows what a drag will do; over
+  // empty image, the drawn cursor (or the system crosshair, if it is off).
+  overBox = !!hit;
+  el.svg.style.cursor = hit ? CURSOR[hit.mode] : (styleOf("cursor").show ? "none" : "crosshair");
+  schedulePointer();
+});
+el.svg.addEventListener("mouseleave", () => {
+  if (drag || draft || panning) return;
+  overBox = false;
+  schedulePointer();
 });
 
 // On window, not on the svg: a drag that leaves the image should keep tracking.
@@ -885,9 +919,9 @@ async function endDraft() {
     exems.push({ id, ...box });
     sel = { kind: "exem", i: exems.length - 1 };
   }
-  boxes.push({ ...box, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
+  boxes.push({ ...box, cls: activeClass, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
   if (!picking) sel = { kind: "box", i: boxes.length - 1 };
-  const events = [logEvent("box.draw", { box: nb(box), provenance: PROV_HUMAN })];
+  const events = [logEvent("box.draw", { box: nb(box), cls: activeClass, provenance: PROV_HUMAN })];
   if (picking) {
     events.push(logEvent("exemplar.pick", { id, box: nb(box) }));
     record("exemplar pick", before, events, { exemplar: { kind: "pick", id, box } });
@@ -918,12 +952,13 @@ function approve(i, bulk) {
   const provenance = p.edited ? PROV_SAM3_ADJUSTED : PROV_SAM3_ASIS;
   boxes.push({
     x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
+    cls: p.cls,
     provenance,
     quality: "verified",
     score: p.score,
   });
   preds.splice(i, 1);
-  return logEvent("pred.approve", { box: nb(p), score: p.score, provenance, bulk });
+  return logEvent("pred.approve", { box: nb(p), cls: p.cls, score: p.score, provenance, bulk });
 }
 
 function approveSelected() {
@@ -962,13 +997,13 @@ function deleteSelected() {
   const before = snapshot();
   if (sel.kind === "pred") {
     const p = preds[sel.i];
-    const ev = logEvent("pred.reject", { box: nb(p), score: p.score, edited: !!p.edited });
+    const ev = logEvent("pred.reject", { box: nb(p), cls: p.cls, score: p.score, edited: !!p.edited });
     preds.splice(sel.i, 1);
     record("rejection", before, [ev]);
   } else {
     const b = boxes[sel.i];
     const ev = logEvent("box.delete",
-                        { box: nb(b), provenance: b.provenance, score: b.score });
+                        { box: nb(b), cls: b.cls, provenance: b.provenance, score: b.score });
     boxes.splice(sel.i, 1);
     record("deletion", before, [ev]);
     touch();
@@ -1068,7 +1103,7 @@ function rect(b, cls) {
 
 /** Corner squares on the selected box: sized in image units from a screen-px
     constant, so they stay the same size on screen at any zoom. */
-function handles(b, base) {
+function handles(b, color) {
   const s = HANDLE_PX / scale();
   for (const [x, y] of [[b.x1, b.y1], [b.x2, b.y1], [b.x1, b.y2], [b.x2, b.y2]]) {
     const r = document.createElementNS(SVG_NS, "rect");
@@ -1076,7 +1111,8 @@ function handles(b, base) {
     r.setAttribute("y", y - s / 2);
     r.setAttribute("width", s);
     r.setAttribute("height", s);
-    r.setAttribute("class", `handle ${base}`);
+    r.setAttribute("class", "handle");
+    r.style.fill = color;
     el.svg.appendChild(r);
   }
 }
@@ -1087,28 +1123,30 @@ function render() {
 
   // Predictions first, so approved and hand-drawn boxes draw on top of them.
   let shown = 0;
+  const predStyle = styleOf("prediction");
   preds.forEach((b, i) => {
     if (b.score < threshold) return;
     shown++;
-    el.svg.appendChild(rect(b, isSel("pred", i) ? "pred sel" : "pred"));
+    el.svg.appendChild(paint(rect(b, "pred"), predStyle, { selected: isSel("pred", i) }));
   });
   boxes.forEach((b, i) => {
     if (twinOfExemplar(b)) return;
-    const base = classOf("box", b);
-    el.svg.appendChild(rect(b, isSel("box", i) ? `${base} sel` : base));
+    el.svg.appendChild(paint(rect(b, "box"), styleFor("box", b), { selected: isSel("box", i) }));
   });
+  const exemStyle = styleOf("exemplar");
   exems.forEach((b, i) => {
-    el.svg.appendChild(rect(b, isSel("exem", i) ? "exem sel" : "exem"));
+    el.svg.appendChild(paint(rect(b, "exem"), exemStyle, { selected: isSel("exem", i) }));
   });
   if (draft) {
-    el.svg.appendChild(rect(
-      { x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 },
-      mode === "exemplar" ? "draft exem" : "draft"));
+    // Drawn in the style of what it will become, dashed while it is a draft.
+    el.svg.appendChild(paint(
+      rect({ x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 }, "draft"),
+      mode === "exemplar" ? exemStyle : classStyle(activeClass), { draft: true }));
   }
   // No handles on an exemplar: it cannot be dragged, and offering a grip that
   // does nothing is worse than offering none.
   const active = at(sel);
-  if (active && sel.kind !== "exem") handles(active, classOf(sel.kind, active));
+  if (active && sel.kind !== "exem") handles(active, styleFor(sel.kind, active).color);
 
   renderCounts(shown);
 }
@@ -1207,6 +1245,9 @@ async function load(i) {
 
   exems = (data.exemplars || []).map(normalise);
   complete = data.complete;
+  const before = seenClasses.size;
+  for (const b of [...boxes, ...preds]) seenClasses.add(b.cls);
+  if (seenClasses.size !== before) renderLegend();
   sel = null;
   draft = null;
   drag = null;
@@ -1584,7 +1625,7 @@ const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1 };
 const WHEEL_NOTCH = 100;     // px one mouse-wheel notch reports, roughly
 const ZOOM_PER_NOTCH = 1.18; // at zoom speed 1: one notch or key press = 18 %
 
-let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS } };
+let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS }, styles: {} };
 let prefsPath = "";          // where the server keeps them, for display
 
 // ---------------------------------------------------------------- input names
@@ -1912,6 +1953,9 @@ function toggleHelp(force) {
 // input that already belongs to another command is not taken without asking.
 // Every change is saved at once to the user's own settings file.
 
+const K_TAB = "al.settingsTab";
+let settingsTab = localStorage.getItem(K_TAB) === "input" ? "input" : "appearance";
+
 let capture = null;          // {id, conflict?: {input, owner}, error?: string}
 let swallowKeyUp = null;     // the key that just finished a capture
 let escapeHandled = false;   // an Escape that cancelled a capture, not the dialog
@@ -1924,8 +1968,9 @@ function toggleKeys() {
   releaseAll();
   capture = null;
   el.keysDialog.showModal();
+  drawPointer();                             // the crosshair hides behind a dialog
   renderKeys();
-  el.keysFilter.focus();
+  (settingsTab === "input" ? el.keysFilter : el.setTabs.querySelector('[aria-selected="true"]')).focus();
 }
 
 function focusKey(f) {
@@ -2054,12 +2099,31 @@ el.keysDialog.addEventListener("cancel", (e) => {
 el.keysDialog.addEventListener("close", () => {
   capture = null;
   el.keysFilter.value = "";
+  schedulePointer();
   if (keysReturnFocus && keysReturnFocus.isConnected) keysReturnFocus.focus();
 });
 
 el.keysClose.addEventListener("click", () => el.keysDialog.close());
+el.setTabs.addEventListener("click", (e) => {
+  const b = e.target.closest(".tab");
+  if (!b || b.dataset.tab === settingsTab) return;
+  settingsTab = b.dataset.tab;
+  localStorage.setItem(K_TAB, settingsTab);
+  capture = null;
+  el.keysList.scrollTop = 0;
+  renderKeys();
+});
 el.keysFilter.addEventListener("input", () => { capture = null; renderKeys(); });
 el.keysResetAll.addEventListener("click", () => {
+  if (settingsTab === "appearance") {
+    if (!window.confirm("Reset every box, cursor and crosshair style to the defaults? "
+                        + "Class names are kept.")) return;
+    prefs.styles = {};
+    for (const id of Object.keys(projectPrefs.classes)) setClass(Number(id), { style: undefined });
+    saveSettings();
+    if (project) saveProjectSettings();
+    return;
+  }
   if (!window.confirm("Reset every shortcut and both speeds to the defaults?")) return;
   prefs.bindings = {};
   prefs.pointer = { ...POINTER_DEFAULTS };
@@ -2088,6 +2152,18 @@ function renderKeys() {
   if (!el.keysDialog.open) return;
   const active = document.activeElement && document.activeElement.dataset
     ? document.activeElement.dataset.f : null;
+  for (const b of el.setTabs.querySelectorAll(".tab")) {
+    b.setAttribute("aria-selected", String(b.dataset.tab === settingsTab));
+  }
+  el.keysFilter.hidden = settingsTab !== "input";
+  if (settingsTab === "appearance") {
+    renderAppearance();
+    const n = appearanceChangeCount();
+    el.keysChanged.textContent = n ? `${plural(n, "style", "styles")} changed` : "All default styles";
+    el.keysResetAll.disabled = !n;
+    if (active) focusKey(active);
+    return;
+  }
   const needle = el.keysFilter.value.trim().toLowerCase();
   const frag = document.createDocumentFragment();
 
@@ -2291,6 +2367,7 @@ function saveSettings() {
   buildTables();
   renderKeys();
   renderHelp();
+  applyAppearance();
   const body = JSON.stringify(prefs);
   settingsSaves = settingsSaves.then(async () => {
     try {
@@ -2317,6 +2394,7 @@ async function loadSettings() {
       version: data.version || 1,
       bindings: data.bindings || {},
       pointer: { ...POINTER_DEFAULTS, ...(data.pointer || {}) },
+      styles: data.styles || {},
     };
     prefsPath = data.path || "";
     const msg = data.warning || data.note || (prefsPath ? `Saved to ${prefsPath}` : "");
@@ -2327,6 +2405,434 @@ async function loadSettings() {
   }
   buildTables();
   renderHelp();
+  applyAppearance();
+}
+
+// ---------------------------------------------------------------- appearance
+//
+// How boxes, the cursor and the crosshair look. Your own boxes are drawn in
+// the style of their class; sam3 predictions, approved sam3 boxes and
+// exemplars keep a style of their own, so where a box came from stays
+// visible whatever the class colours are. Class styles belong to the project
+// (class ids mean different things in different projects); everything else
+// is personal. Defaults live here; the files hold only what you changed.
+//
+// All widths are screen pixels: boxes use non-scaling strokes, and the
+// cursor and crosshair are drawn in a layer that is not zoomed at all.
+
+const PALETTE = ["#a855f7", "#22c55e", "#f472b6", "#14b8a6",
+                 "#818cf8", "#a3e635", "#e879f9", "#94a3b8"];
+
+const STYLE_DEFAULTS = {
+  prediction: { color: "#ff2d2d", fill: 0, width: 2, opacity: 1, line: "solid" },
+  approved:   { color: "#5cc8ff", fill: 0, width: 2, opacity: 1, line: "dotted" },
+  exemplar:   { color: "#ffb01f", fill: 0.1, width: 2, opacity: 1, line: "solid" },
+  cursor:     { show: true, color: "#ffffff", width: 1.5, opacity: 1, line: "solid", size: 22 },
+  crosshair:  { show: true, color: "#ffffff", width: 1, opacity: 0.5, line: "dashed" },
+};
+function classDefault(id) {
+  return { color: PALETTE[id % PALETTE.length], fill: 0, width: 2, opacity: 1, line: "solid" };
+}
+
+const STYLE_KEYS = ["show", "color", "fill", "width", "opacity", "line", "size"];
+const sameStyle = (a, b) => STYLE_KEYS.every((k) => a[k] === b[k]);
+
+let projectPrefs = { version: 1, classes: {} };
+let projectPrefsPath = "";
+let seenClasses = new Set([0]);
+let activeClass = 0;         // the class new boxes get; switching comes later
+
+function styleOf(key) { return { ...STYLE_DEFAULTS[key], ...(prefs.styles[key] || {}) }; }
+function classStyle(id) {
+  const entry = projectPrefs.classes[String(id)];
+  return entry && entry.style ? { ...entry.style } : classDefault(id);
+}
+function className(id) {
+  const entry = projectPrefs.classes[String(id)];
+  return entry && entry.name ? entry.name : `class ${id}`;
+}
+function classIds() {
+  return [...new Set([...seenClasses, ...Object.keys(projectPrefs.classes).map(Number)])]
+    .sort((a, b) => a - b);
+}
+
+/** The style a box is drawn with, by where it came from and, for your own
+    boxes, by class. */
+function styleFor(kind, b) {
+  if (kind === "pred") return styleOf("prediction");
+  if (kind === "exem") return styleOf("exemplar");
+  return fromSam3(b) ? styleOf("approved") : classStyle(b.cls || 0);
+}
+
+/** Dash pattern in screen px, scaled with the width so a thick dotted line
+    is still dotted rather than a row of touching blobs. */
+function dashOf(st) {
+  const w = st.width;
+  if (st.line === "dashed") return { dash: `${Math.max(4, 3 * w)} ${Math.max(3, 2 * w)}`, cap: "butt" };
+  if (st.line === "dotted") return { dash: `1 ${Math.max(6, 4.5 * w)}`, cap: "round" };
+  return { dash: "none", cap: "butt" };
+}
+
+/** Selection is a wash of the box's own colour; it never touches the
+    stroke, which is what says where a box came from. */
+const selectedFill = (f) => Math.min(1, Math.max(0.16, f + 0.12));
+
+function paint(r, st, opts = {}) {
+  const d = dashOf(opts.draft ? { ...st, line: "dashed" } : st);
+  r.style.stroke = st.color;
+  r.style.strokeWidth = st.width + "px";
+  r.style.strokeOpacity = st.opacity;
+  r.style.strokeDasharray = d.dash;
+  r.style.strokeLinecap = d.cap;
+  r.style.fill = st.color;
+  r.style.fillOpacity = opts.draft ? 0 : opts.selected ? selectedFill(st.fill) : st.fill;
+  return r;
+}
+
+/** Everything that depends on styles, after any of them changes. */
+function applyAppearance() {
+  el.viewport.classList.toggle("custom-cursor", styleOf("cursor").show);
+  render();
+  renderLegend();
+  drawPointer();
+}
+
+// ---------------------------------------------------------------- cursor and crosshair
+//
+// Drawn in their own layer over the image, in screen pixels, following the
+// pointer. Over a box or a corner the system cursor comes back, because its
+// move and resize shapes say what a drag there will do; the crosshair lines
+// stay. While panning, the system "grabbing" cursor shows instead.
+
+let pointerAt = null;        // {x, y} in viewport px, or null when outside
+let overBox = false;
+let pointerFrame = 0;
+
+function schedulePointer() {
+  if (!pointerFrame) pointerFrame = requestAnimationFrame(drawPointer);
+}
+
+function setLine(node, show, st, x1, y1, x2, y2) {
+  if (!show) { node.setAttribute("visibility", "hidden"); return; }
+  const d = dashOf(st);
+  node.setAttribute("visibility", "visible");
+  node.setAttribute("x1", x1); node.setAttribute("y1", y1);
+  node.setAttribute("x2", x2); node.setAttribute("y2", y2);
+  node.style.stroke = st.color;
+  node.style.strokeWidth = st.width + "px";
+  node.style.strokeOpacity = st.opacity;
+  node.style.strokeDasharray = d.dash;
+  node.style.strokeLinecap = d.cap;
+}
+
+function drawPointer() {
+  pointerFrame = 0;
+  const on = view === "editor" && !!natW && !!pointerAt && !el.keysDialog.open;
+  const ch = styleOf("crosshair"), cu = styleOf("cursor");
+  const W = el.viewport.clientWidth, H = el.viewport.clientHeight;
+  // A 1 px line on a whole pixel is smeared over two; centre odd widths on .5.
+  const snap = (v, w) => (Math.round(w) % 2 ? Math.floor(v) + 0.5 : Math.round(v));
+  const x = on ? snap(pointerAt.x, ch.width) : 0, y = on ? snap(pointerAt.y, ch.width) : 0;
+  setLine(el.chV, on && ch.show, ch, x, 0, x, H);
+  setLine(el.chH, on && ch.show, ch, 0, y, W, y);
+  const showCursor = on && cu.show && !overBox;
+  const cx = on ? snap(pointerAt.x, cu.width) : 0, cy = on ? snap(pointerAt.y, cu.width) : 0;
+  const r = cu.size / 2;
+  setLine(el.curV, showCursor, cu, cx, cy - r, cx, cy + r);
+  setLine(el.curH, showCursor, cu, cx - r, cy, cx + r, cy);
+}
+
+window.addEventListener("mousemove", (e) => {
+  if (view !== "editor") return;
+  const r = el.viewport.getBoundingClientRect();
+  const x = e.clientX - r.left, y = e.clientY - r.top;
+  const inside = x >= 0 && y >= 0 && x < r.width && y < r.height;
+  pointerAt = inside || drag || draft || panning ? { x, y } : null;
+  schedulePointer();
+}, { passive: true });
+
+el.viewport.addEventListener("mouseleave", () => {
+  if (drag || draft || panning) return;
+  pointerAt = null;
+  schedulePointer();
+});
+window.addEventListener("resize", schedulePointer);
+
+// ---------------------------------------------------------------- legend
+
+/** A small picture of a style: a box, or for the cursor and the lines, the
+    lines themselves, over a patch of grass-coloured background. */
+function stylePreview(kind, st, w = 58, hgt = 36) {
+  // A legend swatch only has to show colour and pattern; a 6 px border in an
+  // 18 x 12 swatch would leave no box at all.
+  const small = hgt < 20;
+  if (small) st = { ...st, width: Math.min(st.width, 2) };
+  const svg = document.createElementNS(SVG_NS, "svg");
+  svg.setAttribute("width", w);
+  svg.setAttribute("height", hgt);
+  svg.setAttribute("class", "preview");
+  svg.setAttribute("aria-hidden", "true");
+  const bg = document.createElementNS(SVG_NS, "rect");
+  bg.setAttribute("width", w); bg.setAttribute("height", hgt);
+  bg.setAttribute("fill", "#3a5a2e");
+  svg.appendChild(bg);
+  const line = (x1, y1, x2, y2) => {
+    const l = document.createElementNS(SVG_NS, "line");
+    setLine(l, true, st, x1, y1, x2, y2);
+    svg.appendChild(l);
+  };
+  if (kind === "box") {
+    const m = small ? 2 : Math.min(Math.max(5, st.width + 3), hgt / 2 - 4);
+    const r = document.createElementNS(SVG_NS, "rect");
+    r.setAttribute("x", m); r.setAttribute("y", m);
+    r.setAttribute("width", w - 2 * m); r.setAttribute("height", hgt - 2 * m);
+    svg.appendChild(paint(r, st));
+  } else if (kind === "cursor") {
+    const r = Math.min(st.size, hgt - 4) / 2;
+    line(w / 2, hgt / 2 - r, w / 2, hgt / 2 + r);
+    line(w / 2 - r, hgt / 2, w / 2 + r, hgt / 2);
+  } else {
+    line(w * 0.62, 0, w * 0.62, hgt);
+    line(0, hgt * 0.4, w, hgt * 0.4);
+  }
+  return svg;
+}
+
+function renderLegend() {
+  const frag = document.createDocumentFragment();
+  const item = (st, text) => {
+    const span = h("span", "legend-item");
+    span.append(stylePreview("box", st, 18, 12), " " + text);
+    frag.appendChild(span);
+  };
+  for (const id of classIds()) item(classStyle(id), className(id));
+  item(styleOf("prediction"), "sam3");
+  item(styleOf("approved"), "sam3 approved");
+  item(styleOf("exemplar"), "exemplar");
+  el.helpLegend.replaceChildren(frag);
+}
+
+// ---------------------------------------------------------------- project settings
+
+async function loadProjectSettings() {
+  projectPrefs = { version: 1, classes: {} };
+  seenClasses = new Set([0]);
+  try {
+    const r = await fetch(q("api/project-settings"));
+    if (!r.ok) throw new Error(`api/project-settings returned ${r.status}`);
+    const data = await r.json();
+    projectPrefs = { version: data.version || 1, classes: data.classes || {} };
+    projectPrefsPath = data.path || "";
+    for (const id of data.seen || []) seenClasses.add(id);
+    if (data.warning) { console.warn(data.warning); keyStatus(data.warning, true); }
+  } catch (err) {
+    console.warn("class styles unavailable:", err.message);
+  }
+  applyAppearance();
+}
+
+let projectSaves = Promise.resolve();
+function saveProjectSettings() {
+  applyAppearance();
+  renderKeys();
+  const p = project;
+  const body = JSON.stringify(projectPrefs);
+  projectSaves = projectSaves.then(async () => {
+    try {
+      const r = await fetch(BASE + "api/project-settings?" + new URLSearchParams({ project: p }), {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body,
+      });
+      if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+      projectPrefsPath = (await r.json()).path || projectPrefsPath;
+      keyStatus(`Class styles saved to ${projectPrefsPath}`);
+    } catch (err) {
+      keyStatus(`Class styles not saved (${err.message}). They work in this tab until you reload.`, true);
+    }
+  });
+}
+
+/** Keep a class entry only while it says something: a name, or a style that
+    differs from the palette default. */
+function setClass(id, patch) {
+  const key = String(id);
+  const entry = { ...(projectPrefs.classes[key] || {}), ...patch };
+  if (entry.style && sameStyle(entry.style, classDefault(id))) delete entry.style;
+  if (!entry.name) delete entry.name;
+  if (entry.style || entry.name) projectPrefs.classes[key] = entry;
+  else delete projectPrefs.classes[key];
+}
+
+function setPersonalStyle(key, st) {
+  if (sameStyle(st, STYLE_DEFAULTS[key])) delete prefs.styles[key];
+  else prefs.styles[key] = st;
+}
+
+// ---------------------------------------------------------------- appearance tab
+
+const pct = (v) => `${Math.round(v * 100)} %`;
+const px = (v) => `${Number(v).toFixed(1).replace(/\.0$/, "")} px`;
+
+/** One style, with its controls. Changes apply live while a slider moves and
+    are saved when it is let go.
+      o.key       id for focus bookkeeping
+      o.kind      "box" | "line" | "cursor"
+      o.style     the style as it is now; o.defaults, what reset returns to
+      o.head      node(s) for the title
+      o.showLabel label of the on/off switch, for styles that have one
+      o.apply(st) live; o.save(st) on commit; o.reset() */
+function styleRow(o) {
+  const st = { ...o.style };
+  const changed = !sameStyle(st, o.defaults);
+  const row = h("div", "stylerow" + (changed ? " changed" : ""));
+
+  const head = h("div", "stylehead");
+  const pv = h("span", "pvwrap");
+  pv.appendChild(stylePreview(o.kind, st));
+  head.append(pv, ...[].concat(o.head));
+  if (changed) head.appendChild(h("span", "tag changed", "changed"));
+  head.appendChild(h("span", "dialog-spacer"));
+  if (changed) {
+    const reset = h("button", "badge", "reset");
+    reset.type = "button";
+    reset.dataset.f = `${o.key}:reset`;
+    reset.addEventListener("click", () => o.reset());
+    head.appendChild(reset);
+  }
+
+  const redraw = () => pv.replaceChildren(stylePreview(o.kind, st));
+  const live = () => { redraw(); o.apply({ ...st }); };
+  const commit = () => o.save({ ...st });
+
+  const ctl = h("div", "stylectl");
+  const field = (label, input, out) => {
+    const lab = h("label", "stylefield");
+    lab.append(h("span", "", label), input);
+    if (out) lab.appendChild(out);
+    ctl.appendChild(lab);
+  };
+  const slider = (prop, label, min, max, step, fmt) => {
+    const r = h("input");
+    r.type = "range"; r.min = min; r.max = max; r.step = step;
+    r.value = String(st[prop]);
+    r.dataset.f = `${o.key}:${prop}`;
+    const out = h("output", "styleval", fmt(st[prop]));
+    r.addEventListener("input", () => {
+      st[prop] = Math.round(Number(r.value) * 100) / 100;
+      out.textContent = fmt(st[prop]);
+      live();
+    });
+    r.addEventListener("change", commit);
+    field(label, r, out);
+  };
+
+  if ("show" in st) {
+    const c = h("input");
+    c.type = "checkbox";
+    c.checked = st.show;
+    c.dataset.f = `${o.key}:show`;
+    c.addEventListener("change", () => { st.show = c.checked; live(); commit(); });
+    const lab = h("label", "stylefield toggle");
+    lab.append(c, h("span", "", o.showLabel));
+    ctl.appendChild(lab);
+  }
+  const color = h("input");
+  color.type = "color";
+  color.value = st.color;
+  color.dataset.f = `${o.key}:color`;
+  color.addEventListener("input", () => { st.color = color.value; live(); });
+  color.addEventListener("change", commit);
+  field("Colour", color);
+
+  if (o.kind === "box") slider("fill", "Fill", 0, 1, 0.05, pct);
+  slider("width", o.kind === "box" ? "Border" : "Thickness", 0.5, 8, 0.5, px);
+  slider("opacity", o.kind === "box" ? "Border opacity" : "Opacity", 0.05, 1, 0.05, pct);
+  if (o.kind === "cursor") slider("size", "Size", 6, 60, 1, px);
+
+  const sel = h("select", "picker");
+  for (const v of ["solid", "dashed", "dotted"]) {
+    const opt = h("option", "", v);
+    opt.value = v;
+    sel.appendChild(opt);
+  }
+  sel.value = st.line;
+  sel.dataset.f = `${o.key}:line`;
+  sel.addEventListener("change", () => { st.line = sel.value; live(); commit(); });
+  field("Line", sel);
+
+  row.append(head, ctl);
+  return row;
+}
+
+function renderAppearance() {
+  const frag = document.createDocumentFragment();
+
+  const classes = h("section", "keys-screen");
+  classes.appendChild(h("h3", "", "Your boxes, by class"));
+  if (!project) {
+    classes.appendChild(h("p", "keyhint", "Open a project to name and style its classes."));
+  } else {
+    classes.appendChild(h("p", "keyhint",
+      `Saved with the project ${project}: class ids mean something different in each project. `
+      + "Every class its annotations use is listed."));
+    for (const id of classIds()) {
+      const name = h("input", "field classname");
+      name.type = "text";
+      name.maxLength = 64;
+      name.placeholder = `class ${id}`;
+      name.value = (projectPrefs.classes[String(id)] || {}).name || "";
+      name.dataset.f = `class${id}:name`;
+      name.setAttribute("aria-label", `Name of class ${id}`);
+      name.addEventListener("change", () => {
+        setClass(id, { name: name.value.trim() });
+        saveProjectSettings();
+      });
+      classes.appendChild(styleRow({
+        key: `class${id}`, kind: "box",
+        style: classStyle(id), defaults: classDefault(id),
+        head: [name, h("span", "classid", `id ${id}`)],
+        apply: (st) => { setClass(id, { style: st }); applyAppearance(); },
+        save: (st) => { setClass(id, { style: st }); saveProjectSettings(); },
+        reset: () => { setClass(id, { style: undefined }); saveProjectSettings(); },
+      }));
+    }
+  }
+  frag.appendChild(classes);
+
+  const personal = (key, kind, title, extra = {}) => styleRow({
+    key, kind, style: styleOf(key), defaults: STYLE_DEFAULTS[key],
+    head: h("span", "keylabel", title), ...extra,
+    apply: (st) => { setPersonalStyle(key, st); applyAppearance(); },
+    save: (st) => { setPersonalStyle(key, st); saveSettings(); },
+    reset: () => { delete prefs.styles[key]; saveSettings(); },
+  });
+
+  const others = h("section", "keys-screen");
+  others.append(h("h3", "", "Other boxes"),
+    h("p", "keyhint", "Styles of their own, so where a box came from stays visible "
+                      + "whatever the class colours are. These are yours, in every project."),
+    personal("prediction", "box", "SAM3 predictions"),
+    personal("approved", "box", "Approved sam3 boxes"),
+    personal("exemplar", "box", "Exemplars"));
+  frag.appendChild(others);
+
+  const pointer = h("section", "keys-screen");
+  pointer.append(h("h3", "", "Cursor and crosshair"),
+    h("p", "keyhint", "Over a box or a corner the system cursor comes back, since its "
+                      + "shape says whether a drag moves or resizes. The lines stay."),
+    personal("cursor", "cursor", "Cursor", { showLabel: "Draw this cursor over the image" }),
+    personal("crosshair", "line", "Crosshair lines", { showLabel: "Show lines through the cursor" }));
+  frag.appendChild(pointer);
+
+  el.keysList.replaceChildren(frag);
+}
+
+/** Style changes on this tab, for the footer: personal styles, plus this
+    project's class styles (names are not "changes from the defaults"). */
+function appearanceChangeCount() {
+  return Object.keys(STYLE_DEFAULTS).filter((k) => prefs.styles[k]).length
+    + Object.values(projectPrefs.classes).filter((c) => c.style).length;
 }
 
 // ---------------------------------------------------------------- small commands
@@ -2691,6 +3197,7 @@ async function openProject(name) {
     return false;
   }
   await refreshExemplarSet();
+  await loadProjectSettings();
   return true;
 }
 

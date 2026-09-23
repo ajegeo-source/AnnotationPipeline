@@ -70,7 +70,11 @@ and the OS user it runs as, so the log already has an actor column for when
 the tool stops being single-user. Undo does not delete an entry: it appends a
 history.undo line naming the entries it reverses.
 
-Personal settings - input bindings and pointer speeds - apply to every project
+Class names and class box styles belong to one project, because class ids
+mean something different in each: they live in <project>/settings.json.
+
+Personal settings - input bindings, pointer speeds, and the look of
+predictions, exemplars, the cursor and the crosshair - apply to every project
 and live in $XDG_CONFIG_HOME/weedloop/settings.json (normally
 ~/.config/weedloop/). Bindings are stored only where they differ from the
 defaults, which are defined in the client next to the commands themselves.
@@ -103,7 +107,7 @@ import uvicorn
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from PIL import Image, ImageOps
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from importlib.resources import files
 
 from weedloop.config import IMAGE_SUFFIXES, Config, Project, Run, load_config
@@ -275,11 +279,15 @@ def prediction_path(run: Run, name: str) -> Path:
 # --------------------------------------------------------------------------
 
 
+MAX_CLASS_ID = 9999
+
+
 class Box(BaseModel):
     x1: float
     y1: float
     x2: float
     y2: float
+    cls: int = Field(default=CLASS_ID, ge=0, le=MAX_CLASS_ID)
     provenance: str = PROVENANCE
     quality: str = QUALITY
     score: float = HUMAN_SCORE
@@ -345,11 +353,22 @@ def read_boxes(
         except ValueError:
             print(f"  skipping {path.name}:{lineno} - non-numeric coordinates")
             continue
+        # The class id is kept, not assumed: a file from a multi-class dataset
+        # must come back out with the ids it went in with. "3.0" is accepted,
+        # since some exporters write class ids as floats.
+        try:
+            cls = int(float(parts[0]))
+        except ValueError:
+            cls = -1
+        if not 0 <= cls <= MAX_CLASS_ID:
+            print(f"  skipping {path.name}:{lineno} - bad class id {parts[0]!r}")
+            continue
         try:
             score = float(parts[7]) if len(parts) > 7 else HUMAN_SCORE
         except ValueError:
             score = HUMAN_SCORE
         boxes.append(Box(
+            cls=cls,
             x1=(cx - w / 2) * width,
             y1=(cy - h / 2) * height,
             x2=(cx + w / 2) * width,
@@ -391,7 +410,7 @@ def write_annotation(project: Project, name: str, boxes: list[Box]) -> None:
         w = (x2 - x1) / width
         h = (y2 - y1) / height
         lines.append(
-            f"{CLASS_ID} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} "
+            f"{b.cls} {cx:.6f} {cy:.6f} {w:.6f} {h:.6f} "
             f"{b.provenance} {b.quality} {b.score:.4f}"
         )
     project.annotations_dir.mkdir(parents=True, exist_ok=True)
@@ -703,6 +722,7 @@ class PersonalSettings(BaseModel):
     version: int = SETTINGS_SCHEMA
     bindings: dict[str, list[str]] = Field(default_factory=dict)
     pointer: PointerSettings = Field(default_factory=PointerSettings)
+    styles: "PersonalStyles" = Field(default_factory=lambda: PersonalStyles())
 
     @field_validator("version")
     @classmethod
@@ -741,6 +761,146 @@ def from_legacy_keybindings(path: Path) -> PersonalSettings:
 
 
 _settings_lock = threading.Lock()
+
+
+# --------------------------------------------------------------------------
+# Box, cursor and crosshair styles
+# --------------------------------------------------------------------------
+
+_COLOR = r"^#[0-9a-fA-F]{6}$"
+
+
+class LineStyle(BaseModel):
+    """A stroke, in screen pixels: the same on screen at any zoom."""
+
+    color: str = Field(pattern=_COLOR)
+    width: float = Field(ge=0.5, le=12)
+    opacity: float = Field(ge=0.05, le=1)
+    line: Literal["solid", "dashed", "dotted"]
+
+
+class BoxStyle(LineStyle):
+    fill: float = Field(ge=0, le=1)          # opacity of the fill, in the same colour
+
+
+class CrosshairStyle(LineStyle):
+    show: bool
+
+
+class CursorStyle(LineStyle):
+    show: bool                               # false: the system crosshair cursor
+    size: float = Field(ge=4, le=80)
+
+
+class PersonalStyles(BaseModel):
+    """Overrides only; a style that is absent follows the default in the client.
+
+    Unknown keys are kept, not dropped, so a file from a newer version survives
+    being saved by this one."""
+
+    model_config = ConfigDict(extra="allow")
+
+    prediction: BoxStyle | None = None
+    approved: BoxStyle | None = None
+    exemplar: BoxStyle | None = None
+    cursor: CursorStyle | None = None
+    crosshair: CrosshairStyle | None = None
+
+
+class ClassEntry(BaseModel):
+    name: str | None = Field(default=None, max_length=64)   # None: shows as "class 3"
+    style: BoxStyle | None = None                            # None: the palette default
+
+    @field_validator("name")
+    @classmethod
+    def _printable(cls, v: str | None) -> str | None:
+        if v is None:
+            return None
+        if any(ord(ch) < 32 for ch in v):
+            raise ValueError("control characters in a class name")
+        return v.strip() or None
+
+
+class ProjectSettings(BaseModel):
+    """What belongs to one project rather than to one person: class names and
+    how each class is drawn. Keys are class ids, as strings (JSON keys)."""
+
+    version: int = SETTINGS_SCHEMA
+    classes: dict[str, ClassEntry] = Field(default_factory=dict)
+
+    @field_validator("classes")
+    @classmethod
+    def _class_ids(cls, classes: dict[str, ClassEntry]) -> dict[str, ClassEntry]:
+        if len(classes) > 1000:
+            raise ValueError("more than 1000 classes")
+        for key in classes:
+            if not key.isdigit() or int(key) > MAX_CLASS_ID or str(int(key)) != key:
+                raise ValueError(f"not a class id: {key!r}")
+        return classes
+
+
+def project_settings_path(project: Project) -> Path:
+    return project.annotations_dir.parent / "settings.json"
+
+
+def write_settings_file(path: Path, model: BaseModel, parse) -> None:
+    """Atomic write, keeping aside a file that exists but cannot be read - it
+    may hold hand edits worth recovering. Callers hold the settings lock."""
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.is_file():
+        try:
+            parse(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError):
+            path.replace(path.with_name(f"{path.stem}.unreadable-{stamp}.json"))
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(model.model_dump_json(indent=2, exclude_none=True) + "\n",
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+# Class ids that occur in a project's annotations, so the settings dialog can
+# list every class there is, not only those in images opened so far. One scan
+# per project and server run; every save adds its classes to the result.
+_seen_classes: dict[str, set[int]] = {}
+_seen_lock = threading.Lock()
+
+
+def seen_classes(project: Project) -> set[int]:
+    key = str(project.annotations_dir)
+    with _seen_lock:
+        if key not in _seen_classes:
+            ids: set[int] = set()
+            if project.annotations_dir.is_dir():
+                for f in project.annotations_dir.glob("*.txt"):
+                    try:
+                        text = f.read_text()
+                    except OSError:
+                        continue
+                    for line in text.splitlines():
+                        head = line.split(maxsplit=1)
+                        if not head:
+                            continue
+                        try:
+                            cls = int(float(head[0]))
+                        except ValueError:
+                            continue
+                        if 0 <= cls <= MAX_CLASS_ID:
+                            ids.add(cls)
+            _seen_classes[key] = ids
+        return set(_seen_classes[key])
+
+
+def note_classes(project: Project, boxes: list[Box]) -> None:
+    with _seen_lock:
+        known = _seen_classes.get(str(project.annotations_dir))
+        if known is not None:
+            known.update(b.cls for b in boxes)
+
+
+# PersonalSettings names PersonalStyles before it is defined; resolve it now
+# rather than on first use.
+PersonalSettings.model_rebuild()
 
 
 # --------------------------------------------------------------------------
@@ -1032,6 +1192,7 @@ def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> di
     image_path(project, name)  # validates the name
     write_annotation(project, name, annotation.boxes)
     write_flag(project, name, annotation.complete)
+    note_classes(project, annotation.boxes)
     return {"saved": len(annotation.boxes)}
 
 
@@ -1078,7 +1239,7 @@ def get_settings() -> dict:
             first = str(exc).splitlines()[0]
             warning = (f"{display_path(source)} could not be read ({first}); using "
                        f"the defaults. The file is kept aside on your next change.")
-    return {**settings.model_dump(), "path": display_path(path),
+    return {**settings.model_dump(exclude_none=True), "path": display_path(path),
             "warning": warning, "note": note}
 
 
@@ -1091,17 +1252,36 @@ def put_settings(settings: PersonalSettings) -> dict:
     path, legacy = settings_path(), legacy_keybindings_path()
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     with _settings_lock:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if path.is_file():
-            try:
-                PersonalSettings.model_validate_json(path.read_text(encoding="utf-8"))
-            except (ValueError, OSError):
-                path.replace(path.with_name(f"{path.stem}.unreadable-{stamp}.json"))
-        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
-        tmp.write_text(settings.model_dump_json(indent=2) + "\n", encoding="utf-8")
-        tmp.replace(path)
+        write_settings_file(path, settings, PersonalSettings.model_validate_json)
         if legacy.is_file():
             legacy.replace(legacy.with_name(f"{legacy.stem}.carried-over-{stamp}.json"))
+    return {"saved": True, "path": display_path(path)}
+
+
+@app.get("/api/project-settings")
+def get_project_settings(project: ProjectDep) -> dict:
+    """Class names and styles for this project, plus every class id its
+    annotations use. An unreadable file is reported, not fatal."""
+    path = project_settings_path(project)
+    warning = None
+    ps = ProjectSettings()
+    if path.is_file():
+        try:
+            ps = ProjectSettings.model_validate_json(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as exc:
+            first = str(exc).splitlines()[0]
+            warning = (f"{display_path(path)} could not be read ({first}); using the "
+                       f"default class styles. The file is kept aside on your next change.")
+    return {**ps.model_dump(exclude_none=True),
+            "seen": sorted(seen_classes(project) | {CLASS_ID}),
+            "path": display_path(path), "warning": warning}
+
+
+@app.put("/api/project-settings")
+def put_project_settings(project: ProjectDep, ps: ProjectSettings) -> dict:
+    path = project_settings_path(project)
+    with _settings_lock:
+        write_settings_file(path, ps, ProjectSettings.model_validate_json)
     return {"saved": True, "path": display_path(path)}
 
 
