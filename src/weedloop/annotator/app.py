@@ -779,6 +779,18 @@ class MinimapSettings(BaseModel):
     min_zoom: float = Field(default=2.0, ge=1.0, le=8.0)
 
 
+class ScanSettings(BaseModel):
+    """Automatic scanning: how fast the view slides (screen px per second), how
+    much two rows overlap, how long after the last touch it resumes, and
+    whether it skips rows already seen or moves on to the next image."""
+
+    speed: float = Field(default=130, ge=10, le=2000)
+    overlap: float = Field(default=0.2, ge=0, le=0.5)
+    resume_s: float = Field(default=2.0, ge=0.5, le=10)
+    skip_seen: bool = False
+    next_image: bool = False
+
+
 class PersonalSettings(BaseModel):
     """What the settings dialog saves.
 
@@ -795,6 +807,7 @@ class PersonalSettings(BaseModel):
     pointer: PointerSettings = Field(default_factory=PointerSettings)
     styles: "PersonalStyles" = Field(default_factory=lambda: PersonalStyles())
     minimap: MinimapSettings = Field(default_factory=MinimapSettings)
+    scan: ScanSettings = Field(default_factory=ScanSettings)
 
     @field_validator("version")
     @classmethod

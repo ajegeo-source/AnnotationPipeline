@@ -291,6 +291,21 @@
   .mm-grip:hover, .minimap.moving .mm-grip { border-color: var(--text); }
   .toast { z-index: 3; }
   .mmtoggle { margin: 4px 8px 6px; }
+  .scantoggle { margin: 6px 8px; }
+  .speedval { min-width: 64px; }   /* "700 px/s" and "2.0x" line up the same */
+
+  /* Says the scan is on and what it is doing: top-left, clear of the minimap
+     (top-right), the toast (top-centre) and the help (bottom-left). */
+  .scanpill {
+    position: absolute; top: 12px; left: 12px; z-index: 2; pointer-events: none;
+    display: flex; align-items: center; gap: 8px; padding: 4px 10px;
+    background: rgba(13, 15, 18, .88); border: 1px solid var(--line); border-radius: 2px;
+    font: 12px/1.4 var(--mono); color: var(--text); font-variant-numeric: tabular-nums;
+    white-space: pre;
+  }
+  .scanpill[hidden] { display: none; }
+  .scanpill i { width: 7px; height: 7px; border-radius: 50%; background: var(--done); }
+  .scanpill[data-state="wait"] i { background: var(--exem); }
 
   .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
@@ -516,6 +531,7 @@
     <line id="curV" visibility="hidden"></line>
     <line id="curH" visibility="hidden"></line>
   </svg>
+  <div class="scanpill" id="scanPill" role="status" hidden><i></i><span id="scanText"></span></div>
   <div class="minimap" id="minimap" hidden>
     <canvas id="mmCanvas" aria-label="Minimap: press or drag to move the view"></canvas>
     <div class="mm-foot"><span id="mmZoom"></span><span id="mmSeen"></span></div>
@@ -679,6 +695,8 @@ const el = {
   mmGrip: document.getElementById("mmGrip"),
   mmZoom: document.getElementById("mmZoom"),
   mmSeen: document.getElementById("mmSeen"),
+  scanPill: document.getElementById("scanPill"),
+  scanText: document.getElementById("scanText"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -1313,6 +1331,7 @@ async function save() {
 
 async function load(i) {
   endVisit();                  // the image being left gets its visit logged
+  if (scan.on) rememberScan(); // and a scan of it, where it got to
   idx = i;
   const name = images[idx].name;
   const data = await (await fetch(q(`api/annotation/${encodeURIComponent(name)}`))).json();
@@ -1351,6 +1370,7 @@ async function load(i) {
   startVisit(name, (data.active_ms || 0) + pendingActive(project, name));
   fitToViewport();
   drawRibbon();
+  scanNewImage();              // a scan that is on carries on with this image
 
   const next = images[idx + 1];
   if (next) new Image().src = q(`api/image/${encodeURIComponent(next.name)}`);
@@ -1500,7 +1520,7 @@ function tickVisit() {
   const t = Date.now(), dt = t - visit.lastTick;
   visit.lastTick = t;
   if (view === "editor" && document.visibilityState === "visible"
-      && t - lastInput < IDLE_MS) {
+      && (t - lastInput < IDLE_MS || scanRunning())) {
     visit.active += Math.min(dt, 2000);   // a throttled timer must not bank a burst
   }
   showTimer();
@@ -1652,12 +1672,14 @@ function clearHistories() {
 //           "amount" runs once per key press, but a wheel feeds it the scroll
 //                    distance of every event instead of whole steps, so a
 //                    trackpad zooms smoothly instead of in jumps.
+// `scanSafe`: does not pause a running scan. Everything else counts as
+//           annotating, or as taking the view over by hand, and pauses it.
 
 const SCREENS = { project: "Anywhere in a project", dataset: "Image grid", editor: "Editor" };
 
 const COMMANDS = {
   "keys.open":         { screen: "project", label: "Open settings",
-                         keys: ["k"], run: () => toggleKeys() },
+                         keys: ["k"], scanSafe: true, run: () => toggleKeys() },
 
   "grid.search":       { screen: "dataset", label: "Filter by file name",
                          keys: ["/"], run: () => focusSearch() },
@@ -1675,13 +1697,13 @@ const COMMANDS = {
                          repeat: true, run: (ctx) => zoomStep(-1, ctx) },
 
   "image.prev":        { screen: "editor", group: "Navigate", label: "Previous image",
-                         keys: ["a"], repeat: true, run: () => go(idx - 1) },
+                         keys: ["a"], repeat: true, scanSafe: true, run: () => go(idx - 1) },
   "image.next":        { screen: "editor", group: "Navigate", label: "Next image",
-                         keys: ["d"], repeat: true, run: () => go(idx + 1) },
+                         keys: ["d"], repeat: true, scanSafe: true, run: () => go(idx + 1) },
   "nav.grid":          { screen: "editor", group: "Navigate", label: "Back to the grid",
                          keys: ["g"], run: () => backToGrid() },
-  "nav.escape":        { screen: "editor", group: "Navigate", label: "Cancel a box, deselect, then back to the grid",
-                         keys: ["Escape"], run: () => escapeKey() },
+  "nav.escape":        { screen: "editor", group: "Navigate", label: "Cancel a box, deselect, stop scanning, then back to the grid",
+                         keys: ["Escape"], scanSafe: true, run: () => escapeKey() },
 
   "edit.undo":         { screen: "editor", group: "Edit", label: "Undo",
                          keys: ["Ctrl+z"], repeat: true, run: () => queueHistory("undo") },
@@ -1703,13 +1725,19 @@ const COMMANDS = {
   "view.fit":          { screen: "editor", group: "View", label: "Fit the image to the screen",
                          keys: ["0"], run: () => fitToViewport() },
   "view.boxes":        { screen: "editor", group: "View", label: "Show or hide all boxes",
-                         keys: ["h"], run: () => toggleBoxes() },
+                         keys: ["h"], scanSafe: true, run: () => toggleBoxes() },
   "view.peek":         { screen: "editor", group: "View", label: "Hide all boxes while held",
-                         kind: "hold", keys: [], run: (down) => peek(down) },
+                         kind: "hold", keys: [], scanSafe: true, run: (down) => peek(down) },
+  "scan.toggle":       { screen: "editor", group: "Scanning", label: "Start or stop scanning the image",
+                         keys: ["s"], scanSafe: true, run: () => toggleScan() },
+  "scan.faster":       { screen: "editor", group: "Scanning", label: "Scan faster",
+                         keys: ["."], repeat: true, scanSafe: true, run: () => scanSpeed(1) },
+  "scan.slower":       { screen: "editor", group: "Scanning", label: "Scan slower",
+                         keys: [","], repeat: true, scanSafe: true, run: () => scanSpeed(-1) },
   "view.minimap":      { screen: "editor", group: "View", label: "Show or hide the minimap",
-                         keys: ["m"], run: () => toggleMinimap() },
+                         keys: ["m"], scanSafe: true, run: () => toggleMinimap() },
   "view.help":         { screen: "editor", group: "View", label: "Show or hide the help",
-                         keys: ["?"], run: () => toggleHelp() },
+                         keys: ["?"], scanSafe: true, run: () => toggleHelp() },
 };
 
 // ---------------------------------------------------------------- settings
@@ -1717,11 +1745,12 @@ const COMMANDS = {
 const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1, draw: "clicks" };
 const MINIMAP_DEFAULTS = { show: true, size: 220, opacity: 0.85, right: 12, top: 12,
                            seen_s: 1.5, min_zoom: 2 };
+const SCAN_DEFAULTS = { speed: 130, overlap: 0.2, resume_s: 2, skip_seen: false, next_image: false };
 const WHEEL_NOTCH = 100;     // px one mouse-wheel notch reports, roughly
 const ZOOM_PER_NOTCH = 1.18; // at zoom speed 1: one notch or key press = 18 %
 
 let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS }, styles: {},
-              minimap: { ...MINIMAP_DEFAULTS } };
+              minimap: { ...MINIMAP_DEFAULTS }, scan: { ...SCAN_DEFAULTS } };
 let prefsPath = "";          // where the server keeps them, for display
 
 // ---------------------------------------------------------------- input names
@@ -1925,6 +1954,7 @@ window.addEventListener("keydown", (e) => {
   if (!id) return;
   e.preventDefault();                        // Ctrl+Z must not reach the browser too
   const cmd = COMMANDS[id];
+  if (!cmd.scanSafe) scanTouch();
   if (cmd.kind === "hold") {
     // Tracked by physical key: if Shift is let go before the key itself, the
     // keyup no longer spells the same combo, but it is the same key.
@@ -1950,6 +1980,7 @@ window.addEventListener("mousedown", (e) => {
   e.preventDefault();                        // no text selection, no autoscroll
   e.stopPropagation();
   const cmd = COMMANDS[id];
+  if (!cmd.scanSafe) scanTouch();
   if (cmd.kind === "drag") { cmd.start(e); return; }
   if (cmd.kind === "hold") { held.set("button" + e.button, id); cmd.run(true); return; }
   cmd.run(pointerCtx(e));
@@ -1989,6 +2020,7 @@ window.addEventListener("wheel", (e) => {
   const id = input && commandFor(input);
   if (!id) return;
   const cmd = COMMANDS[id];
+  if (!cmd.scanSafe) scanTouch();
   const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1;
   const px = Math.abs(e.deltaY || e.deltaX) * unit;
   if (cmd.kind === "amount") { cmd.run({ amount: px, ...pointerCtx(e) }); return; }
@@ -2227,9 +2259,10 @@ el.keysResetAll.addEventListener("click", () => {
     if (project) saveProjectSettings();
     return;
   }
-  if (!window.confirm("Reset every shortcut and both speeds to the defaults?")) return;
+  if (!window.confirm("Reset every shortcut, the mouse settings and the scan settings to the defaults?")) return;
   prefs.bindings = {};
   prefs.pointer = { ...POINTER_DEFAULTS };
+  prefs.scan = { ...SCAN_DEFAULTS };
   capture = null;
   saveSettings();
 });
@@ -2248,7 +2281,8 @@ function keyMatches(id, needle) {
 
 function changeCount() {
   return Object.keys(prefs.bindings).filter((id) => COMMANDS[id]).length
-    + Object.keys(POINTER_DEFAULTS).filter((k) => prefs.pointer[k] !== POINTER_DEFAULTS[k]).length;
+    + Object.keys(POINTER_DEFAULTS).filter((k) => prefs.pointer[k] !== POINTER_DEFAULTS[k]).length
+    + scanChangeCount();
 }
 
 function renderKeys() {
@@ -2272,6 +2306,9 @@ function renderKeys() {
 
   if (!needle || "mouse pointer speed pan zoom wheel".includes(needle)) {
     frag.appendChild(speedSection());
+  }
+  if (!needle || "scan scanning speed overlap resume".includes(needle)) {
+    frag.appendChild(scanSection());
   }
   for (const [screen, title] of Object.entries(SCREENS)) {
     const ids = Object.keys(COMMANDS)
@@ -2527,6 +2564,7 @@ async function loadSettings() {
       pointer: { ...POINTER_DEFAULTS, ...(data.pointer || {}) },
       styles: data.styles || {},
       minimap: { ...MINIMAP_DEFAULTS, ...(data.minimap || {}) },
+      scan: { ...SCAN_DEFAULTS, ...(data.scan || {}) },
     };
     prefsPath = data.path || "";
     const msg = data.warning || data.note || (prefsPath ? `Saved to ${prefsPath}` : "");
@@ -3051,7 +3089,8 @@ setInterval(() => {
   const dt = Math.min(t - coverageLast, 2 * COVERAGE_TICK_MS);  // a throttled tab banks nothing
   coverageLast = t;
   if (!coverage || view !== "editor" || !natW || el.keysDialog.open
-      || document.visibilityState !== "visible" || t - lastInput >= IDLE_MS) return;
+      || document.visibilityState !== "visible"
+      || (t - lastInput >= IDLE_MS && !scanRunning())) return;
   if (!counting()) return;
   const r = visibleRect();
   if (!r) return;
@@ -3220,6 +3259,8 @@ function drawMinimap() {
     g.stroke();
   }
 
+  drawScanOverlay(g, sx, sy);
+
   // Where the view is: a light frame with a dark rim, to read on any image.
   const r = visibleRect();
   if (r) {
@@ -3272,6 +3313,7 @@ function mmJump(e) {
 el.mmCanvas.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
   e.preventDefault();
+  scanTouch();                 // taking the view over by hand
   mmNav = true;
   mmJump(e);
 });
@@ -3392,6 +3434,392 @@ function minimapSection() {
 const minimapChangeCount = () =>
   Object.keys(MINIMAP_DEFAULTS).filter((k) => prefs.minimap[k] !== MINIMAP_DEFAULTS[k]).length;
 
+// ---------------------------------------------------------------- scanning
+//
+// An automatic pass over the image: the view slides along rows, like mowing
+// a field, at a steady speed in screen pixels per second. Rows overlap by
+// scan.overlap of the view height so nothing falls between two of them.
+//
+// It pauses the moment you annotate - a press on the image, a drag, a pan, a
+// zoom, an editing key - and resumes by itself once no box is being drawn or
+// dragged and nothing has been touched for resume_s seconds: the view glides
+// back to where the scan paused and carries on. Only moving the mouse does
+// not pause it, since that is how you follow what goes by.
+//
+// It scans at the zoom it was started at, raised to at least the minimap's
+// "counted from zoom", so the time spent scanning counts as coverage.
+// A running scan counts as activity for the timer and for coverage; with no
+// input at all for SCAN_IDLE_STOP_MS it stops itself rather than run on to
+// an empty chair.
+
+const SCAN_SPEEDS = [30, 45, 65, 90, 130, 180, 250, 350, 500, 700];   // screen px per second
+const SCAN_GLIDE_MS = 400;
+const SCAN_IDLE_STOP_MS = 3 * 60 * 1000;
+
+const scan = {
+  on: false,
+  state: "off",              // "running" | "paused" | "gliding" | "loading" | "off"
+  path: null,                // {pts, cum, total}, in image px, for the view centre
+  d: 0,                      // how far along the path
+  zoom: 1,                   // the zoom it scans at, in times the fit zoom
+  lastTouch: 0,              // performance.now() of the last input that paused it
+  glide: null,
+  raf: 0,
+  last: 0,
+};
+const scanMemory = new Map();   // project + "\0" + image -> {x, y}: where a scan left off
+
+const scanRunning = () => scan.on && (scan.state === "running" || scan.state === "gliding");
+
+function viewCentre() {
+  const s = scale();
+  return { x: (el.viewport.clientWidth / 2 - panX) / s, y: (el.viewport.clientHeight / 2 - panY) / s };
+}
+
+function setViewCentre(p, z) {
+  zoom = z;
+  const s = scale();
+  panX = el.viewport.clientWidth / 2 - p.x * s;
+  panY = el.viewport.clientHeight / 2 - p.y * s;
+  applyTransform();
+}
+
+/** Is every coverage cell in this horizontal band already seen? */
+function bandSeen(y0, y1) {
+  if (!coverage) return false;
+  const { gw, gh, ms } = coverage, ch = natH / gh, need = prefs.minimap.seen_s * 1000;
+  let any = false;
+  for (let j = 0; j < gh; j++) {
+    const cy = (j + 0.5) * ch;
+    if (cy < y0 || cy > y1) continue;
+    any = true;
+    for (let i = 0; i < gw; i++) if (ms[j * gw + i] < need) return false;
+  }
+  return any;
+}
+
+/** The rows, as a polyline of view centres: left to right, down one row,
+    right to left, and so on. Centres stay half a view from the edges, so the
+    edges are on screen without the view running past them. */
+function buildScanPath(z) {
+  const s = fit * z;
+  const vw = el.viewport.clientWidth / s, vh = el.viewport.clientHeight / s;
+  const xL = Math.min(vw / 2, natW / 2), xR = Math.max(natW - vw / 2, natW / 2);
+  const ys = [];
+  if (vh >= natH) {
+    ys.push(natH / 2);
+  } else {
+    const step = Math.max(1, vh * (1 - prefs.scan.overlap));
+    const last = natH - vh / 2;
+    for (let y = vh / 2; y < last - 1; y += step) ys.push(y);
+    ys.push(last);
+  }
+  const rows = prefs.scan.skip_seen ? ys.filter((y) => !bandSeen(y - vh / 2, y + vh / 2)) : ys;
+  const pts = [];
+  rows.forEach((y, k) => {
+    const [a, b] = k % 2 === 0 ? [xL, xR] : [xR, xL];
+    pts.push({ x: a, y }, { x: b, y });
+  });
+  const cum = [0];
+  for (let i = 1; i < pts.length; i++) {
+    cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
+  }
+  return { pts, cum, total: cum[cum.length - 1] || 0, skipped: ys.length - rows.length };
+}
+
+function pointAt(path, d) {
+  const { pts, cum } = path;
+  for (let i = 1; i < pts.length; i++) {
+    if (d <= cum[i]) {
+      const len = cum[i] - cum[i - 1];
+      const t = len ? (d - cum[i - 1]) / len : 0;
+      return { x: pts[i - 1].x + (pts[i].x - pts[i - 1].x) * t,
+               y: pts[i - 1].y + (pts[i].y - pts[i - 1].y) * t };
+    }
+  }
+  return { ...pts[pts.length - 1] };
+}
+
+/** Distance along the path of the point nearest to p. */
+function nearestOnPath(path, p) {
+  const { pts, cum } = path;
+  let best = { dist: Infinity, d: 0 };
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1], b = pts[i];
+    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
+    const t = len2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0, 1) : 0;
+    const dist = Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y);
+    if (dist < best.dist) best = { dist, d: cum[i - 1] + (cum[i] - cum[i - 1]) * t };
+  }
+  return best.d;
+}
+
+const scanKey = () => coverageKey(project, images[idx] ? images[idx].name : "");
+
+/** Where the scan is, for picking up later - unless it got to the end, in
+    which case the next scan of this image starts from the top. */
+function rememberScan() {
+  if (!scan.path || !scan.path.pts.length) return;
+  if (scan.d >= scan.path.total - 1) scanMemory.delete(scanKey());
+  else scanMemory.set(scanKey(), pointAt(scan.path, scan.d));
+}
+
+/** Plan the scan of the image on screen and put it where it left off, or at
+    the start. False, with a message, if there is nothing to scan. */
+function planScan() {
+  scan.path = buildScanPath(scan.zoom);
+  if (!scan.path.pts.length) {
+    flash("Every row of this image has been seen already");
+    return false;
+  }
+  if (!scan.path.total) {
+    flash("The whole image fits on screen at this zoom: zoom in to scan it");
+    return false;
+  }
+  const mem = scanMemory.get(scanKey());
+  scan.d = mem ? nearestOnPath(scan.path, mem) : 0;
+  return true;
+}
+
+function startScan() {
+  if (view !== "editor" || !natW) return;
+  scan.zoom = Math.max(zoom, prefs.minimap.min_zoom);
+  if (!planScan()) return;
+  scan.on = true;
+  beginGlide();                 // from wherever the view is now
+  flash(`Scanning at ${prefs.scan.speed} px/s: . faster, , slower, s stops`);
+  if (!scan.raf) { scan.last = 0; scan.raf = requestAnimationFrame(scanFrame); }
+}
+
+function stopScan(message) {
+  if (!scan.on) return;
+  rememberScan();
+  scan.on = false;
+  scan.state = "off";
+  scan.path = null;
+  cancelAnimationFrame(scan.raf);
+  scan.raf = 0;
+  el.scanPill.hidden = true;
+  scheduleMinimap();
+  if (message) flash(message);
+}
+
+function toggleScan() {
+  if (scan.on) stopScan("Scanning stopped");
+  else startScan();
+}
+
+/** Anything that is annotating, or taking the view over by hand. The scan
+    keeps its place; resuming brings the view back to it. */
+function scanTouch() {
+  if (!scan.on) return;
+  scan.lastTouch = performance.now();
+  if (scan.state !== "paused") scan.state = "paused";
+}
+
+function scanBlocked() {
+  return !!(draft || drag || panning || mmNav || mmDrag || el.keysDialog.open);
+}
+
+function beginGlide() {
+  const c = viewCentre();
+  const to = pointAt(scan.path, scan.d);
+  scan.glide = { t: 0, z0: zoom, z1: scan.zoom, x0: c.x, y0: c.y, x1: to.x, y1: to.y };
+  scan.state = "gliding";
+}
+
+function scanFrame(t) {
+  scan.raf = 0;
+  if (!scan.on) return;
+  const dt = scan.last ? Math.min(t - scan.last, 50) : 0;
+  scan.last = t;
+  if (view !== "editor" || !natW) { stopScan(); return; }
+  if (Date.now() - lastInput > SCAN_IDLE_STOP_MS) {
+    stopScan("Scanning stopped: no input for 3 minutes");
+    return;
+  }
+
+  if (scan.state === "paused") {
+    if (!scanBlocked() && t - scan.lastTouch >= prefs.scan.resume_s * 1000) beginGlide();
+  } else if (scan.state === "gliding") {
+    const g = scan.glide;
+    g.t = Math.min(1, g.t + dt / SCAN_GLIDE_MS);
+    const e = g.t < 0.5 ? 2 * g.t * g.t : 1 - Math.pow(-2 * g.t + 2, 2) / 2;
+    setViewCentre({ x: g.x0 + (g.x1 - g.x0) * e, y: g.y0 + (g.y1 - g.y0) * e },
+                  g.z0 * Math.pow(g.z1 / g.z0, e));
+    if (g.t >= 1) { scan.state = "running"; render(); }
+  } else if (scan.state === "running" && !el.keysDialog.open) {
+    scan.d += prefs.scan.speed * dt / 1000 / scale();
+    if (scan.d >= scan.path.total) {
+      scan.d = scan.path.total;
+      setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
+      finishScan();
+      return;
+    }
+    setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
+  }
+  showScanPill(t);
+  scan.raf = requestAnimationFrame(scanFrame);
+}
+
+function finishScan() {
+  scanMemory.delete(scanKey());   // next time this image starts from the top
+  if (prefs.scan.next_image && idx < images.length - 1) {
+    flash("Scan finished: on to the next image");
+    scan.state = "loading";        // until load() has planned the next image
+    scan.raf = requestAnimationFrame(scanFrame);
+    const from = idx;
+    go(idx + 1).then(() => {
+      if (scan.state === "loading" && idx === from) {
+        stopScan("Scanning stopped: this image could not be saved");
+      }
+    });
+    return;
+  }
+  stopScan(idx < images.length - 1 || !prefs.scan.next_image
+    ? "Scan of this image finished"
+    : "Scan finished: that was the last image");
+}
+
+/** Called by load() for each new image while scanning is on: plan it, and
+    start after the usual resume pause, so there is a moment to look first. */
+function scanNewImage() {
+  if (!scan.on) return;
+  if (!planScan()) { stopScan(); return; }
+  scan.state = "paused";
+  scan.lastTouch = performance.now();
+}
+
+let scanPillText = "";
+function showScanPill(t) {
+  let text, cls;
+  if (scan.state === "loading") {
+    text = "Scan: opening the next image";
+    cls = "wait";
+  } else if (scan.state === "running") {
+    text = `Scanning ${prefs.scan.speed} px/s  ${Math.round(100 * scan.d / scan.path.total)} %`;
+    cls = "run";
+  } else if (scan.state === "gliding") {
+    text = "Resuming the scan";
+    cls = "run";
+  } else if (scanBlocked()) {
+    text = el.keysDialog.open ? "Scan paused" : "Scan paused while you annotate";
+    cls = "wait";
+  } else {
+    const left = Math.max(0, prefs.scan.resume_s - (t - scan.lastTouch) / 1000);
+    text = `Scan resumes in ${left.toFixed(1)} s`;
+    cls = "wait";
+  }
+  el.scanPill.hidden = false;
+  if (text !== scanPillText) { el.scanText.textContent = text; scanPillText = text; }
+  el.scanPill.dataset.state = cls;
+}
+
+let scanSaveTimer = 0;
+function scanSpeed(dir) {
+  const i = SCAN_SPEEDS.reduce((best, v, k) =>
+    Math.abs(v - prefs.scan.speed) < Math.abs(SCAN_SPEEDS[best] - prefs.scan.speed) ? k : best, 0);
+  const j = clamp(i + dir, 0, SCAN_SPEEDS.length - 1);
+  prefs.scan.speed = SCAN_SPEEDS[j];
+  flash(j === i ? `Scan speed stays at ${prefs.scan.speed} px/s, the ${dir > 0 ? "fastest" : "slowest"}`
+                : `Scan speed ${prefs.scan.speed} px/s`);
+  clearTimeout(scanSaveTimer);
+  scanSaveTimer = setTimeout(saveSettings, 800);   // a burst of presses saves once
+}
+
+/** A resized window means another view size, so another path. Re-plan at the
+    scan's zoom and carry on from the same place on the image. */
+window.addEventListener("resize", () => {
+  if (!scan.on || !scan.path || !natW) return;
+  const here = pointAt(scan.path, scan.d);
+  scan.path = buildScanPath(scan.zoom);
+  if (!scan.path.total) { stopScan("Scanning stopped: the image fits on screen now"); return; }
+  scan.d = nearestOnPath(scan.path, here);
+  setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
+  render();
+});
+
+/** The planned path on the minimap, faint, so it is clear where the scan
+    goes next and how much is left. */
+function drawScanOverlay(g, sx, sy) {
+  if (!scan.on || !scan.path || scan.path.pts.length < 2) return;
+  g.save();
+  g.setLineDash([3, 3]);
+  g.lineWidth = 1;
+  g.strokeStyle = "rgba(255, 255, 255, 0.55)";
+  g.beginPath();
+  scan.path.pts.forEach((p, i) => (i ? g.lineTo(p.x * sx, p.y * sy) : g.moveTo(p.x * sx, p.y * sy)));
+  g.stroke();
+  g.restore();
+}
+
+// ---------------------------------------------------------------- settings section
+
+function scanSection() {
+  const sc = prefs.scan;
+  const sec = h("section", "keys-screen");
+  sec.append(h("h3", "", "Scanning"),
+    h("p", "keyhint", "s starts or stops a scan of the image; . and , make it faster or slower. "
+      + "It pauses while you annotate and picks up where it left off."));
+
+  const row = (key, label, hint, min, max, step, fmt, toValue = (v) => v, fromValue = (v) => v) => {
+    const changed = sc[key] !== SCAN_DEFAULTS[key];
+    const r = h("div", "keyrow speed" + (changed ? " changed" : ""));
+    const lab = h("label", "keylabel");
+    lab.htmlFor = `scan-${key}`;
+    lab.append(label, h("span", "sub", hint));
+    const wrap = h("span", "chips");
+    const input = h("input");
+    input.type = "range"; input.id = `scan-${key}`;
+    input.min = min; input.max = max; input.step = step;
+    input.value = String(fromValue(sc[key]));
+    input.dataset.f = `scan:${key}`;
+    const out = h("output", "speedval", fmt(sc[key]));
+    input.addEventListener("input", () => {
+      sc[key] = toValue(Number(input.value));
+      out.textContent = fmt(sc[key]);
+    });
+    input.addEventListener("change", () => saveSettings());
+    wrap.append(input, out);
+    const actions = h("span", "keyactions");
+    if (changed) {
+      const reset = h("button", "badge", "reset");
+      reset.type = "button";
+      reset.dataset.f = `scan:${key}:reset`;
+      reset.addEventListener("click", () => { sc[key] = SCAN_DEFAULTS[key]; saveSettings(); });
+      actions.appendChild(reset);
+    }
+    r.append(lab, wrap, actions);
+    return r;
+  };
+  const check = (key, label) => {
+    const l = h("label", "stylefield toggle scantoggle");
+    const c = h("input");
+    c.type = "checkbox";
+    c.checked = sc[key];
+    c.dataset.f = `scan:${key}`;
+    c.addEventListener("change", () => { sc[key] = c.checked; saveSettings(); });
+    l.append(c, h("span", "", label));
+    return l;
+  };
+  const speedIndex = (v) => SCAN_SPEEDS.reduce((best, s, k) =>
+    Math.abs(s - v) < Math.abs(SCAN_SPEEDS[best] - v) ? k : best, 0);
+  sec.append(
+    row("speed", "Speed", "How fast the image slides by, on screen. The same as . and ,.",
+        0, SCAN_SPEEDS.length - 1, 1, (v) => `${v} px/s`,
+        (i) => SCAN_SPEEDS[i], speedIndex),
+    row("overlap", "Row overlap", "How much of the view two rows share, so nothing falls between them.",
+        0, 0.5, 0.05, (v) => `${Math.round(v * 100)} %`),
+    row("resume_s", "Resume after", "Time without touching anything, once no box is being drawn, "
+        + "before the scan picks up again.", 0.5, 10, 0.5, (v) => `${v} s`),
+    check("skip_seen", "Skip rows already seen (by the minimap's rule), e.g. after a break"),
+    check("next_image", "When an image is done, go on to the next one"));
+  return sec;
+}
+
+const scanChangeCount = () =>
+  Object.keys(SCAN_DEFAULTS).filter((k) => prefs.scan[k] !== SCAN_DEFAULTS[k]).length;
+
 // ---------------------------------------------------------------- small commands
 
 /** Zoom about a point in viewport pixels; the centre when none is given. */
@@ -3432,7 +3860,9 @@ function toggleMode() {
 
 function escapeKey() {
   if (draft) { draft = null; render(); flash("Box cancelled"); return; }
-  if (sel) { sel = null; render(); } else backToGrid();
+  if (sel) { sel = null; render(); return; }
+  if (scan.on) { stopScan("Scanning stopped"); return; }
+  backToGrid();
 }
 
 function focusSearch() {
@@ -3578,6 +4008,7 @@ function parseHash() {
 
 function showView(name) {
   releaseAll();
+  if (name !== "editor") stopScan();
   // Settings belong to the project open; they have no business on the list.
   if (name === "projects" && el.keysDialog.open) el.keysDialog.close();
   if (view === "editor" && name !== "editor") endVisit();
