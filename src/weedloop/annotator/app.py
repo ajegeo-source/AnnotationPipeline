@@ -766,29 +766,36 @@ class PointerSettings(BaseModel):
 
 
 class MinimapSettings(BaseModel):
-    """The minimap's look and place, and what counts as having looked at a
-    part of the image: at least `min_zoom` times the fit-to-screen zoom, for
-    `seen_s` seconds in total."""
+    """The minimap's look and place, and from what zoom looking at a part of
+    the image counts: at least `min_zoom` times the fit-to-screen zoom."""
 
     show: bool = True
     size: int = Field(default=220, ge=100, le=480)          # width, screen px
     opacity: float = Field(default=0.85, ge=0.2, le=1.0)
     right: float = Field(default=12, ge=0, le=10000)        # top-right corner, px
     top: float = Field(default=12, ge=0, le=10000)          # from the view's
-    seen_s: float = Field(default=1.5, ge=0.5, le=10)
     min_zoom: float = Field(default=2.0, ge=1.0, le=8.0)
 
 
 class ScanSettings(BaseModel):
-    """Automatic scanning: how fast the view slides (screen px per second), how
-    much two rows overlap, how long after the last touch it resumes, and
-    whether it skips rows already seen or moves on to the next image."""
+    """Automatic scanning: how fast the view slides (screen px per second,
+    one of the levels the client offers), how long it holds the image's first
+    and last view, how much two rows overlap, how long after the last touch a
+    paused scan goes on, and whether it moves on to the next image."""
 
     speed: float = Field(default=130, ge=10, le=2000)
+    edge_s: float = Field(default=1.0, ge=0, le=10)
     overlap: float = Field(default=0.2, ge=0, le=0.5)
     resume_s: float = Field(default=2.0, ge=0.5, le=10)
-    skip_seen: bool = False
     next_image: bool = False
+
+
+class StripSettings(BaseModel):
+    """The strip of next images under the editor: shown or not, and how tall
+    its thumbnails are, in screen px."""
+
+    show: bool = True
+    height: int = Field(default=84, ge=56, le=200)
 
 
 class PersonalSettings(BaseModel):
@@ -808,6 +815,7 @@ class PersonalSettings(BaseModel):
     styles: "PersonalStyles" = Field(default_factory=lambda: PersonalStyles())
     minimap: MinimapSettings = Field(default_factory=MinimapSettings)
     scan: ScanSettings = Field(default_factory=ScanSettings)
+    strip: StripSettings = Field(default_factory=StripSettings)
 
     @field_validator("version")
     @classmethod
@@ -1037,7 +1045,7 @@ def list_projects(cfg: CfgDep) -> dict:
             "images": len(names),
             "signed_off": signed,
             "in_progress": started,
-            "cover": names[0] if names else None,
+            "covers": spread(names, 3),
         })
     return {
         "projects": out,
@@ -1046,13 +1054,21 @@ def list_projects(cfg: CfgDep) -> dict:
     }
 
 
+def spread(names: list[str], k: int) -> list[str]:
+    """Up to k names spread evenly from first to last, for a project card that
+    shows the set rather than its first few frames."""
+    if len(names) <= k:
+        return list(names)
+    return [names[round(i * (len(names) - 1) / (k - 1))] for i in range(k)]
+
+
 def progress(project: Project, names: list[str]) -> tuple[int, int]:
     """(signed off, in progress) for the project card.
 
     Counted by stem against the current image list, so a flag or annotation
     left behind by an image that has since been removed does not inflate
     either number. "In progress" means boxes exist but no sign-off - the same
-    three states the ribbon and the grid colour by.
+    three states the grid and the image strip colour by.
 
     Annotated is judged by file size rather than by reading each file: an
     empty annotation file is exactly what an image with every box deleted
@@ -1155,7 +1171,7 @@ def delete_run(project: ProjectDep, run: str, confirm: str = "") -> dict:
 
 @app.get("/api/images")
 def list_images(project: ProjectDep) -> list[dict]:
-    """Every image with just enough state to draw the progress ribbon.
+    """Every image with just enough state for the grid and the image strip.
 
     This walks two files per image. It is the first thing that will need an
     index when a project gets large - see the note at the bottom of the file.

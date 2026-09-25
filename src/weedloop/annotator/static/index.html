@@ -16,9 +16,9 @@
     --exem:    #ffb01f;   /* amber      - picked as a SAM3 prompt */
     --done:    #4bd6a4;
     --pending: #4a5460;
-    --started: #8a7fd4;   /* boxes but no sign-off; same as the ribbon */
+    --started: #8a7fd4;   /* boxes but no sign-off */
     --todo:    #2b323b;
-    --cursor:  #ff2d78;   /* the ribbon's "you are here" */
+    --cursor:  #ff2d78;   /* "you are here": the open image, in the grid and the strip */
     --mono:    ui-monospace, "SF Mono", Menlo, Consolas, monospace;
   }
   * { box-sizing: border-box; }
@@ -281,7 +281,14 @@
     font: 11px/1.3 var(--mono); color: var(--text); font-variant-numeric: tabular-nums;
     white-space: nowrap;
   }
-  .mm-foot .paused { color: var(--dim); }
+  /* drawMinimap() sets the footer's width to the picture's; border-box keeps
+     its padding inside that width, and the note shrinks with an ellipsis
+     rather than push the minimap wider. */
+  .mm-foot { box-sizing: border-box; }
+  .mm-foot > span { overflow: hidden; text-overflow: ellipsis; }
+  #mmZoom { flex: none; }
+  #mmNote { min-width: 0; color: var(--dim); }
+  #mmNote:empty { display: none; }
   /* The one handle that moves it: its top-right corner. */
   .mm-grip {
     position: absolute; top: -7px; right: -7px; width: 16px; height: 16px; cursor: move;
@@ -292,18 +299,73 @@
   .toast { z-index: 3; }
   .mmtoggle { margin: 4px 8px 6px; }
   .scantoggle { margin: 6px 8px; }
-  .speedval { min-width: 64px; }   /* "700 px/s" and "2.0x" line up the same */
+  .speedval { min-width: 64px; }
+
+  /* ------------------------------------------------ image strip */
+  .strip {
+    position: relative; height: calc(var(--strip-h, 84px) + 14px); overflow: hidden;
+    background: var(--bg); border-top: 1px solid var(--line);
+    cursor: grab; user-select: none; touch-action: none;
+  }
+  .strip[hidden] { display: none; }
+  .strip.dragging { cursor: grabbing; }
+  .strip-track { position: absolute; inset: 0; }
+  .stile {
+    --c: var(--todo);
+    position: absolute; top: 7px; left: 0;
+    width: var(--strip-w, 149px); height: var(--strip-h, 84px);
+    background: #0d0f12; border: 1px solid var(--line); border-radius: 2px; overflow: hidden;
+  }
+  .stile.s-progress { --c: var(--started); }
+  .stile.s-done     { --c: var(--done); }
+  .stile img { display: block; width: 100%; height: 100%; object-fit: cover; pointer-events: none; }
+  .stile .sbar { position: absolute; left: 0; right: 0; bottom: 0; height: 3px; background: var(--c); }
+  .stile .sidx {
+    position: absolute; top: 3px; left: 3px; padding: 0 4px; border-radius: 2px;
+    font: 10px/1.5 var(--mono); color: var(--dim); background: rgba(13, 15, 18, .82);
+    font-variant-numeric: tabular-nums;
+  }
+  .strip:not(.dragging) .stile:hover { border-color: var(--dim); }
+  /* The image being annotated, in the "you are here" colour. */
+  .stile.current { border-color: var(--cursor); box-shadow: 0 0 0 1px var(--cursor); }
+  .stile.current .sidx { color: var(--text); }   /* "700 px/s" and "2.0x" line up the same */
 
   /* Says the scan is on and what it is doing: top-left, clear of the minimap
      (top-right), the toast (top-centre) and the help (bottom-left). */
-  .scanpill {
+  /* Top-left: the scan's state, and beside it the small box for how long it
+     holds the first and last view - the only part that takes the pointer. */
+  .scanbar {
     position: absolute; top: 12px; left: 12px; z-index: 2; pointer-events: none;
+    display: flex; align-items: stretch; gap: 6px;
+  }
+  .scanbar[hidden] { display: none; }
+  .scanpill {
     display: flex; align-items: center; gap: 8px; padding: 4px 10px;
     background: rgba(13, 15, 18, .88); border: 1px solid var(--line); border-radius: 2px;
     font: 12px/1.4 var(--mono); color: var(--text); font-variant-numeric: tabular-nums;
     white-space: pre;
   }
-  .scanpill[hidden] { display: none; }
+  .scanedge {
+    pointer-events: auto; display: flex; align-items: center; gap: 5px; padding: 0 8px;
+    background: rgba(13, 15, 18, .88); border: 1px solid var(--line); border-radius: 2px;
+    font: 12px/1.4 var(--mono); color: var(--dim); white-space: nowrap;
+  }
+  .scanedge input {
+    width: 46px; padding: 1px 4px; font: inherit; color: var(--text);
+    background: var(--bg); border: 1px solid var(--line); border-radius: 2px;
+  }
+  .scanedge input:focus { outline: none; border-color: var(--human); }
+  /* The speed level, for a moment after it changes: rising bars, lit up to it. */
+  .scanlevel {
+    position: absolute; top: 44px; left: 12px; z-index: 2; pointer-events: none;
+    display: flex; align-items: center; gap: 9px; padding: 6px 10px;
+    background: rgba(13, 15, 18, .88); border: 1px solid var(--line); border-radius: 2px;
+    font: 12px/1.4 var(--mono); color: var(--text);
+  }
+  .scanlevel[hidden] { display: none; }
+  .scanlevel .bars { display: flex; align-items: flex-end; gap: 3px; height: 17px; }
+  .scanlevel .bars i { width: 4px; border-radius: 1px; background: var(--line); }
+  .scanlevel .bars i.on { background: var(--done); }
   .scanpill i { width: 7px; height: 7px; border-radius: 50%; background: var(--done); }
   .scanpill[data-state="wait"] i { background: var(--exem); }
 
@@ -312,8 +374,6 @@
   .timer.idle { opacity: .45; }
   .viewport.boxes-hidden { cursor: default; }
 
-  footer { background: var(--panel); border-top: 1px solid var(--line); }
-  #ribbon { display: block; width: 100%; height: 26px; cursor: pointer; }
   .badge.danger { color: #ff6b6b; }
   .badge.danger:disabled { color: var(--line); cursor: default; }
   .picker { background: var(--panel); color: inherit; border: 1px solid var(--line);
@@ -352,8 +412,10 @@
   }
   .card:hover { border-color: var(--dim); }
   .card.last { border-color: var(--cursor); }
-  .cover { aspect-ratio: 16 / 9; background: #0d0f12; }
-  .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  /* Three images from the set - first, middle, last - side by side. */
+  .cover { display: grid; grid-template-columns: repeat(3, 1fr); gap: 2px; background: var(--line); }
+  .cover-cell { aspect-ratio: 4 / 3; background: #0d0f12; overflow: hidden; }
+  .cover-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
   .card .body { display: grid; gap: 9px; padding: 12px 14px 14px; }
   .card .title { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
   .card h2 {
@@ -367,7 +429,7 @@
     border-radius: 2px; padding: 0 6px; white-space: nowrap;
   }
   .card.last .tag.last { color: var(--cursor); border-color: var(--cursor); }
-  /* The meter is the ribbon folded into one bar: same colours, same order. */
+  /* The meter: the grid's three states in one bar, same colours, same order. */
   .meter { display: flex; height: 6px; background: var(--todo); border-radius: 1px; overflow: hidden; }
   .meter .d { background: var(--done); }
   .meter .p { background: var(--started); }
@@ -531,10 +593,16 @@
     <line id="curV" visibility="hidden"></line>
     <line id="curH" visibility="hidden"></line>
   </svg>
-  <div class="scanpill" id="scanPill" role="status" hidden><i></i><span id="scanText"></span></div>
+  <div class="scanbar" id="scanBar" hidden>
+    <div class="scanpill" id="scanPill" role="status"><i></i><span id="scanText"></span></div>
+    <label class="scanedge" title="How long the scan holds the image's first view before it moves, and its last view before it ends">
+      hold <input id="scanEdge" type="number" min="0" max="10" step="0.5" aria-label="Seconds to hold the first and last view"> s
+    </label>
+  </div>
+  <div class="scanlevel" id="scanLevel" hidden aria-hidden="true"><span class="bars" id="scanLevelBars"></span><span id="scanLevelName"></span></div>
   <div class="minimap" id="minimap" hidden>
     <canvas id="mmCanvas" aria-label="Minimap: press or drag to move the view"></canvas>
-    <div class="mm-foot"><span id="mmZoom"></span><span id="mmSeen"></span></div>
+    <div class="mm-foot"><span id="mmZoom"></span><span id="mmNote"></span></div>
     <span class="mm-grip" id="mmGrip" title="Drag to move the minimap"></span>
   </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
@@ -545,7 +613,9 @@
   </div>
 </div>
 
-<footer><canvas id="ribbon"></canvas></footer>
+<div class="strip" id="strip" aria-label="The next images: drag to look ahead, click to open">
+  <div class="strip-track" id="stripTrack"></div>
+</div>
 </section>
 
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
@@ -652,7 +722,6 @@ const el = {
   stage: document.getElementById("stage"),
   photo: document.getElementById("photo"),
   svg: document.getElementById("svg"),
-  ribbon: document.getElementById("ribbon"),
   runSel: document.getElementById("runSel"),
   delRun: document.getElementById("delRun"),
   runControls: document.getElementById("runControls"),
@@ -694,9 +763,17 @@ const el = {
   mmCanvas: document.getElementById("mmCanvas"),
   mmGrip: document.getElementById("mmGrip"),
   mmZoom: document.getElementById("mmZoom"),
-  mmSeen: document.getElementById("mmSeen"),
+  mmNote: document.getElementById("mmNote"),
+  mmFoot: document.querySelector("#minimap .mm-foot"),
   scanPill: document.getElementById("scanPill"),
+  scanBar: document.getElementById("scanBar"),
+  scanEdge: document.getElementById("scanEdge"),
+  scanLevel: document.getElementById("scanLevel"),
+  scanLevelBars: document.getElementById("scanLevelBars"),
+  scanLevelName: document.getElementById("scanLevelName"),
   scanText: document.getElementById("scanText"),
+  strip: document.getElementById("strip"),
+  stripTrack: document.getElementById("stripTrack"),
 };
 
 /** Which screen is showing: "projects", "dataset" or "editor". The editor's
@@ -925,7 +1002,8 @@ let lastClient = null;       // where the pointer last was, for followPointer()
 window.addEventListener("mousemove", (e) => {
   // While the minimap is being used, an open box waits: its corner should not
   // jump to whatever part of the image the minimap happens to cover.
-  if (mmDrag || mmNav || (draft && draft.open && e.target.closest && e.target.closest(".minimap"))) return;
+  if (mmDrag || mmNav || strip.press
+      || (draft && draft.open && e.target.closest && e.target.closest(".minimap, .strip, .scanbar"))) return;
   lastClient = { clientX: e.clientX, clientY: e.clientY };
   if (drag) { dragTo(toImage(e)); return; }
   if (draft) {
@@ -1255,6 +1333,7 @@ function render() {
 
 function renderCounts(shown) {
   scheduleMinimap();                 // the dots follow the boxes
+  scheduleStrip();                   // and the strip's status bars
   const derived = boxes.filter(fromSam3).length;
   el.boxcount.textContent =
     `${boxes.length} ${boxes.length === 1 ? "box" : "boxes"}`
@@ -1265,31 +1344,6 @@ function renderCounts(shown) {
   el.flag.textContent = complete ? "signed off" : "not signed off";
   el.flag.classList.toggle("on", complete);
 }
-
-// ---------------------------------------------------------------- ribbon
-
-function drawRibbon() {
-  const c = el.ribbon;
-  const w = c.clientWidth, h = 26, dpr = window.devicePixelRatio || 1;
-  c.width = w * dpr; c.height = h * dpr;
-  const g = c.getContext("2d");
-  g.scale(dpr, dpr);
-  g.clearRect(0, 0, w, h);
-  const n = images.length;
-  const step = w / n;
-  for (let i = 0; i < n; i++) {
-    const im = images[i];
-    g.fillStyle = im.complete ? "#4bd6a4" : (im.boxes > 0 ? "#8a7fd4" : "#2b323b");
-    g.fillRect(i * step, 7, Math.max(step, 1), 12);
-  }
-  g.fillStyle = "#ff2d78";
-  g.fillRect(Math.max(0, idx * step - 1), 2, Math.max(step, 2) + 2, 22);
-}
-
-el.ribbon.addEventListener("click", (e) => {
-  const r = el.ribbon.getBoundingClientRect();
-  go(Math.floor(((e.clientX - r.left) / r.width) * images.length));
-});
 
 // ---------------------------------------------------------------- io
 
@@ -1325,13 +1379,13 @@ async function save() {
   }
   images[idx].boxes = boxes.length;
   images[idx].complete = complete;
-  drawRibbon();
+  scheduleStrip();                   // its status bar follows the save
   return true;
 }
 
 async function load(i) {
   endVisit();                  // the image being left gets its visit logged
-  if (scan.on) rememberScan(); // and a scan of it, where it got to
+  const stripPrev = images[idx] ? idx : -1;
   idx = i;
   const name = images[idx].name;
   const data = await (await fetch(q(`api/annotation/${encodeURIComponent(name)}`))).json();
@@ -1369,8 +1423,8 @@ async function load(i) {
   el.counter.textContent = `${idx + 1} / ${images.length}`;
   startVisit(name, (data.active_ms || 0) + pendingActive(project, name));
   fitToViewport();
-  drawRibbon();
   scanNewImage();              // a scan that is on carries on with this image
+  stripFollow(stripPrev);      // the new image slides to the left edge
 
   const next = images[idx + 1];
   if (next) new Image().src = q(`api/image/${encodeURIComponent(next.name)}`);
@@ -1531,10 +1585,8 @@ function endVisit() {
   tickVisit();
   const v = visit;
   visit = null;
-  const seen = coverage && coverage.project === v.project && coverage.image === v.image
-    ? { seen: Math.round(seenFraction() * 1000) / 1000 } : {};
   logEvent("image.visit",
-           { active_ms: Math.round(v.active), wall_ms: Date.now() - v.started, ...seen },
+           { active_ms: Math.round(v.active), wall_ms: Date.now() - v.started },
            { project: v.project, image: v.image });
 }
 
@@ -1672,8 +1724,9 @@ function clearHistories() {
 //           "amount" runs once per key press, but a wheel feeds it the scroll
 //                    distance of every event instead of whole steps, so a
 //                    trackpad zooms smoothly instead of in jumps.
-// `scanSafe`: does not pause a running scan. Everything else counts as
-//           annotating, or as taking the view over by hand, and pauses it.
+// `scanSafe`: does not interrupt a running scan.
+// `scanView`: moves the view by hand, which holds a scan until s. Anything
+//           else that is not scanSafe counts as annotating and pauses it.
 
 const SCREENS = { project: "Anywhere in a project", dataset: "Image grid", editor: "Editor" };
 
@@ -1688,13 +1741,13 @@ const COMMANDS = {
                          kind: "drag", keys: ["MouseLeft"], start: (e) => pointerEditStart(e),
                          essential: "boxes cannot be drawn or edited" },
   "view.pan":          { screen: "editor", group: "Mouse", label: "Pan the image",
-                         kind: "drag", keys: ["MouseMiddle"], start: (e) => panStart(e) },
+                         kind: "drag", keys: ["MouseMiddle"], scanView: true, start: (e) => panStart(e) },
   "view.zoomIn":       { screen: "editor", group: "Mouse", label: "Zoom in",
                          kind: "amount", keys: ["WheelUp", "Ctrl+WheelUp", "+", "="],
-                         repeat: true, run: (ctx) => zoomStep(1, ctx) },
+                         repeat: true, scanView: true, run: (ctx) => zoomStep(1, ctx) },
   "view.zoomOut":      { screen: "editor", group: "Mouse", label: "Zoom out",
                          kind: "amount", keys: ["WheelDown", "Ctrl+WheelDown", "-"],
-                         repeat: true, run: (ctx) => zoomStep(-1, ctx) },
+                         repeat: true, scanView: true, run: (ctx) => zoomStep(-1, ctx) },
 
   "image.prev":        { screen: "editor", group: "Navigate", label: "Previous image",
                          keys: ["a"], repeat: true, scanSafe: true, run: () => go(idx - 1) },
@@ -1723,19 +1776,21 @@ const COMMANDS = {
                          keys: ["e"], run: () => toggleMode() },
 
   "view.fit":          { screen: "editor", group: "View", label: "Fit the image to the screen",
-                         keys: ["0"], run: () => fitToViewport() },
+                         keys: ["0"], scanView: true, run: () => fitToViewport() },
   "view.boxes":        { screen: "editor", group: "View", label: "Show or hide all boxes",
                          keys: ["h"], scanSafe: true, run: () => toggleBoxes() },
   "view.peek":         { screen: "editor", group: "View", label: "Hide all boxes while held",
                          kind: "hold", keys: [], scanSafe: true, run: (down) => peek(down) },
-  "scan.toggle":       { screen: "editor", group: "Scanning", label: "Start or stop scanning the image",
+  "scan.toggle":       { screen: "editor", group: "Scanning", label: "Scan: start, go on from here, or stop",
                          keys: ["s"], scanSafe: true, run: () => toggleScan() },
-  "scan.faster":       { screen: "editor", group: "Scanning", label: "Scan faster",
+  "scan.faster":       { screen: "editor", group: "Scanning", label: "Scan faster (while scanning)",
                          keys: ["."], repeat: true, scanSafe: true, run: () => scanSpeed(1) },
-  "scan.slower":       { screen: "editor", group: "Scanning", label: "Scan slower",
+  "scan.slower":       { screen: "editor", group: "Scanning", label: "Scan slower (while scanning)",
                          keys: [","], repeat: true, scanSafe: true, run: () => scanSpeed(-1) },
   "view.minimap":      { screen: "editor", group: "View", label: "Show or hide the minimap",
                          keys: ["m"], scanSafe: true, run: () => toggleMinimap() },
+  "view.strip":        { screen: "editor", group: "View", label: "Show or hide the image strip",
+                         keys: ["t"], scanSafe: true, run: () => toggleStrip() },
   "view.help":         { screen: "editor", group: "View", label: "Show or hide the help",
                          keys: ["?"], scanSafe: true, run: () => toggleHelp() },
 };
@@ -1744,13 +1799,15 @@ const COMMANDS = {
 
 const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1, draw: "clicks" };
 const MINIMAP_DEFAULTS = { show: true, size: 220, opacity: 0.85, right: 12, top: 12,
-                           seen_s: 1.5, min_zoom: 2 };
-const SCAN_DEFAULTS = { speed: 130, overlap: 0.2, resume_s: 2, skip_seen: false, next_image: false };
+                           min_zoom: 2 };
+const SCAN_DEFAULTS = { speed: 130, edge_s: 1, overlap: 0.2, resume_s: 2, next_image: false };
+const STRIP_DEFAULTS = { show: true, height: 84 };
 const WHEEL_NOTCH = 100;     // px one mouse-wheel notch reports, roughly
 const ZOOM_PER_NOTCH = 1.18; // at zoom speed 1: one notch or key press = 18 %
 
 let prefs = { version: 1, bindings: {}, pointer: { ...POINTER_DEFAULTS }, styles: {},
-              minimap: { ...MINIMAP_DEFAULTS }, scan: { ...SCAN_DEFAULTS } };
+              minimap: { ...MINIMAP_DEFAULTS }, scan: { ...SCAN_DEFAULTS },
+              strip: { ...STRIP_DEFAULTS } };
 let prefsPath = "";          // where the server keeps them, for display
 
 // ---------------------------------------------------------------- input names
@@ -1937,7 +1994,7 @@ function releaseAll() {
 /** Clicks and the wheel act on the image only. Everywhere else - buttons,
     lists, the grid - they keep doing what they always do. */
 const overImage = (e) => view === "editor" && !!natW && el.viewport.contains(e.target)
-  && !(e.target.closest && e.target.closest(".minimap"));
+  && !(e.target.closest && e.target.closest(".minimap, .scanbar"));
 
 function pointerCtx(e) {
   const r = el.viewport.getBoundingClientRect();
@@ -1954,7 +2011,7 @@ window.addEventListener("keydown", (e) => {
   if (!id) return;
   e.preventDefault();                        // Ctrl+Z must not reach the browser too
   const cmd = COMMANDS[id];
-  if (!cmd.scanSafe) scanTouch();
+  if (!cmd.scanSafe) scanTouch(cmd.scanView ? "view" : "annotate");
   if (cmd.kind === "hold") {
     // Tracked by physical key: if Shift is let go before the key itself, the
     // keyup no longer spells the same combo, but it is the same key.
@@ -1980,7 +2037,7 @@ window.addEventListener("mousedown", (e) => {
   e.preventDefault();                        // no text selection, no autoscroll
   e.stopPropagation();
   const cmd = COMMANDS[id];
-  if (!cmd.scanSafe) scanTouch();
+  if (!cmd.scanSafe) scanTouch(cmd.scanView ? "view" : "annotate");
   if (cmd.kind === "drag") { cmd.start(e); return; }
   if (cmd.kind === "hold") { held.set("button" + e.button, id); cmd.run(true); return; }
   cmd.run(pointerCtx(e));
@@ -2020,7 +2077,7 @@ window.addEventListener("wheel", (e) => {
   const id = input && commandFor(input);
   if (!id) return;
   const cmd = COMMANDS[id];
-  if (!cmd.scanSafe) scanTouch();
+  if (!cmd.scanSafe) scanTouch(cmd.scanView ? "view" : "annotate");
   const unit = e.deltaMode === 1 ? 33 : e.deltaMode === 2 ? 800 : 1;
   const px = Math.abs(e.deltaY || e.deltaX) * unit;
   if (cmd.kind === "amount") { cmd.run({ amount: px, ...pointerCtx(e) }); return; }
@@ -2249,10 +2306,11 @@ el.setTabs.addEventListener("click", (e) => {
 el.keysFilter.addEventListener("input", () => { capture = null; renderKeys(); });
 el.keysResetAll.addEventListener("click", () => {
   if (settingsTab === "appearance") {
-    if (!window.confirm("Reset every box, cursor, crosshair and minimap setting to the "
-                        + "defaults? Class names are kept.")) return;
+    if (!window.confirm("Reset every box, cursor, crosshair, minimap and image strip setting "
+                        + "to the defaults? Class names are kept.")) return;
     prefs.styles = {};
     prefs.minimap = { ...MINIMAP_DEFAULTS };
+    prefs.strip = { ...STRIP_DEFAULTS };
     mmBase = null;
     for (const id of Object.keys(projectPrefs.classes)) setClass(Number(id), { style: undefined });
     saveSettings();
@@ -2565,6 +2623,7 @@ async function loadSettings() {
       styles: data.styles || {},
       minimap: { ...MINIMAP_DEFAULTS, ...(data.minimap || {}) },
       scan: { ...SCAN_DEFAULTS, ...(data.scan || {}) },
+      strip: { ...STRIP_DEFAULTS, ...(data.strip || {}) },
     };
     prefsPath = data.path || "";
     const msg = data.warning || data.note || (prefsPath ? `Saved to ${prefsPath}` : "");
@@ -2666,6 +2725,7 @@ function applyAppearance() {
   renderLegend();
   drawPointer();
   scheduleMinimap();
+  applyStripLayout();
 }
 
 // ---------------------------------------------------------------- cursor and crosshair
@@ -2998,6 +3058,7 @@ function renderAppearance() {
     personal("crosshair", "line", "Crosshair lines", { showLabel: "Show lines through the cursor" }));
   frag.appendChild(pointer);
   frag.appendChild(minimapSection());
+  frag.appendChild(stripSection());
 
   el.keysList.replaceChildren(frag);
 }
@@ -3007,7 +3068,8 @@ function renderAppearance() {
 function appearanceChangeCount() {
   return Object.keys(STYLE_DEFAULTS).filter((k) => prefs.styles[k]).length
     + Object.values(projectPrefs.classes).filter((c) => c.style).length
-    + minimapChangeCount();
+    + minimapChangeCount()
+    + stripChangeCount();
 }
 
 // ---------------------------------------------------------------- minimap
@@ -3020,8 +3082,8 @@ function appearanceChangeCount() {
 // "Looked at" is counted on a coarse grid, per cell, while the cell's centre
 // is on screen, the view is zoomed in at least min_zoom times the fit zoom,
 // and the annotator is active by the same rule as the timer (tab visible,
-// input within IDLE_MS). A cell counts as seen after seen_s seconds in total.
-// Counts are kept on the server, so a pass can span several visits.
+// input within IDLE_MS). Counts are kept on the server, so a pass can span
+// several visits.
 
 const COVERAGE_CELLS = 40;           // cells along the image's longer side
 const COVERAGE_TICK_MS = 250;
@@ -3110,14 +3172,6 @@ setInterval(() => {
   scheduleMinimap();
 }, COVERAGE_TICK_MS);
 
-function seenFraction(cov = coverage) {
-  if (!cov) return 0;
-  const need = prefs.minimap.seen_s * 1000;
-  let n = 0;
-  for (const v of cov.ms) if (v >= need) n++;
-  return n / cov.ms.length;
-}
-
 const coverageUrl = (d) =>
   BASE + `api/coverage/${encodeURIComponent(d.image)}?` + new URLSearchParams({ project: d.project });
 const coverageBody = (d) =>
@@ -3189,12 +3243,14 @@ function buildMinimapBase() {
 }
 el.photo.addEventListener("load", () => { buildMinimapBase(); scheduleMinimap(); });
 
-/** Never seen: a dark veil, so what is left stands out. Then amber, turning
-    green as the time approaches "seen" - the ribbon's colour for done. */
+/** Never looked at: a dark veil, so what is left stands out. Everything else
+    goes from amber to green with t, its share of the time spent on the part
+    of this image looked at longest - a picture of where the time went, with
+    no line drawn for "enough". */
 function heat(t) {
   const a = [255, 176, 31], b = [75, 214, 164];
   const c = a.map((v, i) => Math.round(v + (b[i] - v) * t));
-  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, ${t >= 1 ? 0.38 : 0.5})`;
+  return `rgba(${c[0]}, ${c[1]}, ${c[2]}, 0.45)`;
 }
 
 function placeMinimap() {
@@ -3223,6 +3279,10 @@ function drawMinimap() {
     c.style.width = w + "px";
     c.style.height = h + "px";
   }
+  // The footer is exactly as wide as the picture, set here rather than left
+  // to the text: a long note must be trimmed, never widen the minimap and
+  // leave a dark band beside the picture.
+  el.mmFoot.style.width = w + "px";
   el.minimap.style.opacity = m.opacity;
   placeMinimap();
 
@@ -3234,14 +3294,17 @@ function drawMinimap() {
   else { g.fillStyle = "#1b1f25"; g.fillRect(0, 0, w, h); }
 
   if (coverage) {
-    const need = m.seen_s * 1000;
     const { gw, gh, ms } = coverage;
+    let most = 0;
+    for (const v of ms) if (v > most) most = v;
     for (let j = 0; j < gh; j++) {
       const y0 = Math.floor(j * h / gh), y1 = Math.floor((j + 1) * h / gh);
       for (let i = 0; i < gw; i++) {
         const v = ms[j * gw + i];
         const x0 = Math.floor(i * w / gw), x1 = Math.floor((i + 1) * w / gw);
-        g.fillStyle = v > 0 ? heat(Math.min(1, v / need)) : "rgba(8, 10, 12, 0.5)";
+        // Square root, so a part looked at a quarter as long as the most-looked-at
+        // one is already halfway to green instead of barely off amber.
+        g.fillStyle = v > 0 ? heat(Math.sqrt(v / most)) : "rgba(8, 10, 12, 0.5)";
         g.fillRect(x0, y0, x1 - x0, y1 - y0);
       }
     }
@@ -3275,15 +3338,10 @@ function drawMinimap() {
 
   el.mmZoom.textContent = `${Math.round(scale() * 100)} %`;
   el.mmZoom.title = `${Math.round(scale() * 100)} % of the image's pixels, ${zoom.toFixed(1)}\u00d7 the fit-to-screen zoom`;
-  if (coverage) {
-    const pctSeen = Math.round(seenFraction() * 100);
-    el.mmSeen.textContent = counting() ? `${pctSeen} % seen` : `${pctSeen} % seen, zoom in to count`;
-    el.mmSeen.classList.toggle("paused", !counting());
-    el.mmSeen.title = `Parts looked at for ${m.seen_s} s or more, counted from `
-      + `${m.min_zoom}\u00d7 the fit zoom. Dark: not looked at yet.`;
-  } else {
-    el.mmSeen.textContent = "";
-  }
+  // Beside the zoom; on a narrow minimap trimmed with an ellipsis, since the
+  // footer is held to the picture's width.
+  el.mmNote.textContent = coverage && !counting() ? "zoom in to count" : "";
+  el.mmNote.title = `Time only counts from ${m.min_zoom}\u00d7 the fit-to-screen zoom.`;
 }
 
 window.addEventListener("resize", () => { mmBase = null; scheduleMinimap(); });
@@ -3313,7 +3371,7 @@ function mmJump(e) {
 el.mmCanvas.addEventListener("mousedown", (e) => {
   if (e.button !== 0) return;
   e.preventDefault();
-  scanTouch();                 // taking the view over by hand
+  scanTouch("view");           // taking the view over by hand
   mmNav = true;
   mmJump(e);
 });
@@ -3356,8 +3414,9 @@ function minimapSection() {
   const sec = h("section", "keys-screen");
   sec.append(h("h3", "", "Minimap"),
     h("p", "keyhint", "Drag it by its top-right corner; press or drag on it to move the view. "
-      + "Dark parts have not been looked at yet; amber turns green as they get looked at "
-      + "for long enough. Dots are your boxes, in their class colour. m shows or hides it."));
+      + "Dark parts have not been looked at yet; the rest go from amber to green the longer "
+      + "they have been looked at, compared with the part looked at longest. Dots are your "
+      + "boxes, in their class colour. m shows or hides it."));
 
   const toggle = h("label", "stylefield toggle mmtoggle");
   const c = h("input");
@@ -3407,8 +3466,6 @@ function minimapSection() {
   sec.append(
     row("size", "Size", "Width on screen.", 100, 480, 10, (v) => `${v} px`),
     row("opacity", "Opacity", "Of the whole minimap.", 0.2, 1, 0.05, (v) => `${Math.round(v * 100)} %`),
-    row("seen_s", "Seen after", "Time a part must be on screen, in total, to count as seen.",
-        0.5, 10, 0.5, (v) => `${v} s`),
     row("min_zoom", "Counted from zoom",
         "Looking at the whole image at once is not scanning it, so time only counts "
         + "from this much zoom, in times the fit-to-screen zoom.",
@@ -3437,39 +3494,74 @@ const minimapChangeCount = () =>
 // ---------------------------------------------------------------- scanning
 //
 // An automatic pass over the image: the view slides along rows, like mowing
-// a field, at a steady speed in screen pixels per second. Rows overlap by
-// scan.overlap of the view height so nothing falls between two of them.
+// a field. Rows overlap by scan.overlap of the view height so nothing falls
+// between two of them.
 //
-// It pauses the moment you annotate - a press on the image, a drag, a pan, a
-// zoom, an editing key - and resumes by itself once no box is being drawn or
-// dragged and nothing has been touched for resume_s seconds: the view glides
-// back to where the scan paused and carries on. Only moving the mouse does
-// not pause it, since that is how you follow what goes by.
+// s starts a pass from the view on screen, at its zoom, towards the end of
+// the image - or, when the whole image is on screen, a full pass from the
+// first view. The zoom is raised to at least the minimap's "counted from
+// zoom", so scanning time counts as coverage. There is no "continue where I
+// left off": every start is a new pass from where the view is.
 //
-// It scans at the zoom it was started at, raised to at least the minimap's
-// "counted from zoom", so the time spent scanning counts as coverage.
+// Two kinds of interruption:
+//   annotating (a press on the image, an editing key) pauses it, and it goes
+//     on by itself once no box is being drawn or dragged and nothing has
+//     been touched for resume_s seconds - from the view as it is then;
+//   moving the view by hand (pan, zoom, fit, the minimap) holds it until s,
+//     which starts a new pass from the new view, in the direction it was
+//     going. Only moving the mouse interrupts nothing.
+//
+// Speed is one of a few fixed levels, set with . and , while a scan is on;
+// bars show the level for a moment after each change. The first and the last
+// view of the image are held for edge_s seconds.
+//
 // A running scan counts as activity for the timer and for coverage; with no
 // input at all for SCAN_IDLE_STOP_MS it stops itself rather than run on to
 // an empty chair.
 
-const SCAN_SPEEDS = [30, 45, 65, 90, 130, 180, 250, 350, 500, 700];   // screen px per second
+const SCAN_LEVELS = [
+  { name: "slowest", px: 40 },
+  { name: "slow", px: 60 },
+  { name: "not so slow", px: 90 },
+  { name: "normal", px: 130 },
+  { name: "a bit faster", px: 180 },
+  { name: "fast", px: 250 },
+  { name: "fastest", px: 350 },
+];                                  // speeds in screen px per second
 const SCAN_GLIDE_MS = 400;
+const SCAN_LEVEL_SHOW_MS = 1500;
 const SCAN_IDLE_STOP_MS = 3 * 60 * 1000;
 
 const scan = {
   on: false,
-  state: "off",              // "running" | "paused" | "gliding" | "loading" | "off"
+  // "gliding" (into place) | "dwell-start" | "running" | "dwell-end" |
+  // "paused" (annotating, resumes by itself) | "held" (view moved, waits for s) |
+  // "loading" (the next image) | "off"
+  state: "off",
   path: null,                // {pts, cum, total}, in image px, for the view centre
   d: 0,                      // how far along the path
-  zoom: 1,                   // the zoom it scans at, in times the fit zoom
-  lastTouch: 0,              // performance.now() of the last input that paused it
+  zoom: 1,                   // the zoom of this pass, in times the fit zoom
+  dir: 1,                    // +1 rightwards, -1 leftwards, for the next pass
+  firstFrame: false,         // this pass starts at the image's first view
+  atEnd: false,              // reached the last view, holding it
+  fresh: false,              // a new image: the next pass is a full one
+  lastTouch: 0,
+  dwellUntil: 0,
   glide: null,
   raf: 0,
   last: 0,
 };
-const scanMemory = new Map();   // project + "\0" + image -> {x, y}: where a scan left off
 
-const scanRunning = () => scan.on && (scan.state === "running" || scan.state === "gliding");
+const scanRunning = () => scan.on
+  && ["running", "gliding", "dwell-start", "dwell-end"].includes(scan.state);
+
+function speedLevel() {
+  let best = 0;
+  SCAN_LEVELS.forEach((l, k) => {
+    if (Math.abs(l.px - prefs.scan.speed) < Math.abs(SCAN_LEVELS[best].px - prefs.scan.speed)) best = k;
+  });
+  return best;
+}
 
 function viewCentre() {
   const s = scale();
@@ -3484,47 +3576,33 @@ function setViewCentre(p, z) {
   applyTransform();
 }
 
-/** Is every coverage cell in this horizontal band already seen? */
-function bandSeen(y0, y1) {
-  if (!coverage) return false;
-  const { gw, gh, ms } = coverage, ch = natH / gh, need = prefs.minimap.seen_s * 1000;
-  let any = false;
-  for (let j = 0; j < gh; j++) {
-    const cy = (j + 0.5) * ch;
-    if (cy < y0 || cy > y1) continue;
-    any = true;
-    for (let i = 0; i < gw; i++) if (ms[j * gw + i] < need) return false;
-  }
-  return any;
-}
-
-/** The rows, as a polyline of view centres: left to right, down one row,
-    right to left, and so on. Centres stay half a view from the edges, so the
-    edges are on screen without the view running past them. */
-function buildScanPath(z) {
+/** The rows ahead, as a polyline of view centres. From `from` ({x, y, dir})
+    it runs along the current row in `dir`, then down and back and forth to
+    the bottom; without it, the whole image from its first view, top-left.
+    Centres stay half a view from the edges, so the edges are on screen
+    without the view running past them. */
+function buildScanPath(z, from) {
   const s = fit * z;
   const vw = el.viewport.clientWidth / s, vh = el.viewport.clientHeight / s;
   const xL = Math.min(vw / 2, natW / 2), xR = Math.max(natW - vw / 2, natW / 2);
-  const ys = [];
-  if (vh >= natH) {
-    ys.push(natH / 2);
-  } else {
-    const step = Math.max(1, vh * (1 - prefs.scan.overlap));
-    const last = natH - vh / 2;
-    for (let y = vh / 2; y < last - 1; y += step) ys.push(y);
-    ys.push(last);
+  const yT = Math.min(vh / 2, natH / 2), yB = Math.max(natH - vh / 2, natH / 2);
+  const step = Math.max(1, vh * (1 - prefs.scan.overlap));
+  const y0 = from ? clamp(from.y, yT, yB) : yT;
+  const x0 = from ? clamp(from.x, xL, xR) : xL;
+  let dir = from && from.dir ? from.dir : 1;
+  const ys = [y0];
+  for (let y = y0 + step; y < yB - 1; y += step) ys.push(y);
+  if (yB - ys[ys.length - 1] > 1) ys.push(yB);
+  const pts = [{ x: x0, y: y0 }, { x: dir > 0 ? xR : xL, y: y0 }];
+  for (let k = 1; k < ys.length; k++) {
+    dir = -dir;                      // each row starts where the last one ended
+    pts.push({ x: dir > 0 ? xL : xR, y: ys[k] }, { x: dir > 0 ? xR : xL, y: ys[k] });
   }
-  const rows = prefs.scan.skip_seen ? ys.filter((y) => !bandSeen(y - vh / 2, y + vh / 2)) : ys;
-  const pts = [];
-  rows.forEach((y, k) => {
-    const [a, b] = k % 2 === 0 ? [xL, xR] : [xR, xL];
-    pts.push({ x: a, y }, { x: b, y });
-  });
   const cum = [0];
   for (let i = 1; i < pts.length; i++) {
     cum.push(cum[i - 1] + Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y));
   }
-  return { pts, cum, total: cum[cum.length - 1] || 0, skipped: ys.length - rows.length };
+  return { pts, cum, total: cum[cum.length - 1] || 0 };
 }
 
 function pointAt(path, d) {
@@ -3540,81 +3618,113 @@ function pointAt(path, d) {
   return { ...pts[pts.length - 1] };
 }
 
-/** Distance along the path of the point nearest to p. */
-function nearestOnPath(path, p) {
+/** Which way the scan is going at d: along a row, that row's way; on a step
+    down between rows, the way of the row it is stepping to. */
+function dirAt(path, d) {
   const { pts, cum } = path;
-  let best = { dist: Infinity, d: 0 };
   for (let i = 1; i < pts.length; i++) {
-    const a = pts[i - 1], b = pts[i];
-    const dx = b.x - a.x, dy = b.y - a.y, len2 = dx * dx + dy * dy;
-    const t = len2 ? clamp(((p.x - a.x) * dx + (p.y - a.y) * dy) / len2, 0, 1) : 0;
-    const dist = Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y);
-    if (dist < best.dist) best = { dist, d: cum[i - 1] + (cum[i] - cum[i - 1]) * t };
+    if (d <= cum[i] || i === pts.length - 1) {
+      for (let k = i; k < pts.length; k++) {
+        const dx = pts[k].x - pts[k - 1].x;
+        if (Math.abs(dx) > 0.5) return Math.sign(dx);
+      }
+      return scan.dir;
+    }
   }
-  return best.d;
+  return scan.dir;
 }
 
-const scanKey = () => coverageKey(project, images[idx] ? images[idx].name : "");
-
-/** Where the scan is, for picking up later - unless it got to the end, in
-    which case the next scan of this image starts from the top. */
-function rememberScan() {
-  if (!scan.path || !scan.path.pts.length) return;
-  if (scan.d >= scan.path.total - 1) scanMemory.delete(scanKey());
-  else scanMemory.set(scanKey(), pointAt(scan.path, scan.d));
-}
-
-/** Plan the scan of the image on screen and put it where it left off, or at
-    the start. False, with a message, if there is nothing to scan. */
-function planScan() {
-  scan.path = buildScanPath(scan.zoom);
-  if (!scan.path.pts.length) {
-    flash("Every row of this image has been seen already");
-    return false;
-  }
-  if (!scan.path.total) {
+/** A new pass at zoom z, from `from` or from the first view. With nothing
+    left to scan from `from` (it is at the end already), a full pass. */
+function plan(from, z) {
+  scan.zoom = z;
+  scan.path = buildScanPath(z, from);
+  scan.d = 0;
+  scan.atEnd = false;
+  scan.firstFrame = !from;
+  if (scan.path.total < 1) {
+    if (from) return plan(null, z);
     flash("The whole image fits on screen at this zoom: zoom in to scan it");
     return false;
   }
-  const mem = scanMemory.get(scanKey());
-  scan.d = mem ? nearestOnPath(scan.path, mem) : 0;
+  scan.dir = dirAt(scan.path, 0);
   return true;
+}
+
+/** Where a pass starts: the view on screen, at its zoom - or the first view,
+    for a new image or when the whole image is on screen. */
+function planFromHere() {
+  const minZoom = Math.max(1, prefs.minimap.min_zoom);
+  if (scan.fresh) {
+    scan.fresh = false;
+    return plan(null, Math.max(scan.zoom, minZoom));
+  }
+  if (zoom <= 1.001) return plan(null, minZoom);
+  const c = viewCentre();
+  return plan({ x: c.x, y: c.y, dir: scan.dir }, Math.max(zoom, minZoom));
+}
+
+function ensureScanLoop() {
+  if (!scan.raf) { scan.last = 0; scan.raf = requestAnimationFrame(scanFrame); }
 }
 
 function startScan() {
   if (view !== "editor" || !natW) return;
-  scan.zoom = Math.max(zoom, prefs.minimap.min_zoom);
-  if (!planScan()) return;
   scan.on = true;
-  beginGlide();                 // from wherever the view is now
-  flash(`Scanning at ${prefs.scan.speed} px/s: . faster, , slower, s stops`);
-  if (!scan.raf) { scan.last = 0; scan.raf = requestAnimationFrame(scanFrame); }
+  if (!planFromHere()) { scan.on = false; return; }
+  beginGlide();
+  showScanLevel();
+  flash("Scanning: . and , set the speed, s stops");
+  ensureScanLoop();
 }
 
 function stopScan(message) {
   if (!scan.on) return;
-  rememberScan();
   scan.on = false;
   scan.state = "off";
   scan.path = null;
+  scan.fresh = false;
   cancelAnimationFrame(scan.raf);
   scan.raf = 0;
-  el.scanPill.hidden = true;
+  el.scanBar.hidden = true;
+  hideScanLevel();
   scheduleMinimap();
   if (message) flash(message);
 }
 
-function toggleScan() {
-  if (scan.on) stopScan("Scanning stopped");
-  else startScan();
+/** Held at the last view when interrupted: go back to holding it. Otherwise
+    a new pass from the view as it is now. */
+function resumeScan() {
+  if (scan.atEnd) {
+    scan.state = "dwell-end";
+    scan.dwellUntil = performance.now() + prefs.scan.edge_s * 1000;
+    return;
+  }
+  if (!planFromHere()) { stopScan(); return; }
+  beginGlide();
 }
 
-/** Anything that is annotating, or taking the view over by hand. The scan
-    keeps its place; resuming brings the view back to it. */
-function scanTouch() {
-  if (!scan.on) return;
+/** s: start; go on from here after an interruption; or stop. */
+function toggleScan() {
+  if (!scan.on) { startScan(); return; }
+  if (scan.state === "held" || scan.state === "paused") { resumeScan(); return; }
+  if (scan.state === "loading") return;
+  stopScan("Scanning stopped");
+}
+
+/** An interruption. "annotate" pauses, and the scan goes on by itself;
+    "view" - the view moved by hand - holds it until s. */
+function scanTouch(kind = "annotate") {
+  if (!scan.on || scan.state === "loading") return;
+  if (scan.path && scanRunning()) scan.dir = dirAt(scan.path, scan.d);
   scan.lastTouch = performance.now();
-  if (scan.state !== "paused") scan.state = "paused";
+  if (kind === "view") {
+    scan.state = "held";
+    scan.atEnd = false;
+    scan.fresh = false;              // the view is now the user's, even on a new image
+  } else if (scan.state !== "held") {
+    scan.state = "paused";
+  }
 }
 
 function scanBlocked() {
@@ -3638,35 +3748,51 @@ function scanFrame(t) {
     stopScan("Scanning stopped: no input for 3 minutes");
     return;
   }
+  const dialog = el.keysDialog.open;
+  if (dialog && (scan.state === "dwell-start" || scan.state === "dwell-end")) scan.dwellUntil += dt;
 
   if (scan.state === "paused") {
-    if (!scanBlocked() && t - scan.lastTouch >= prefs.scan.resume_s * 1000) beginGlide();
+    if (!scanBlocked() && t - scan.lastTouch >= prefs.scan.resume_s * 1000) resumeScan();
   } else if (scan.state === "gliding") {
     const g = scan.glide;
     g.t = Math.min(1, g.t + dt / SCAN_GLIDE_MS);
     const e = g.t < 0.5 ? 2 * g.t * g.t : 1 - Math.pow(-2 * g.t + 2, 2) / 2;
     setViewCentre({ x: g.x0 + (g.x1 - g.x0) * e, y: g.y0 + (g.y1 - g.y0) * e },
                   g.z0 * Math.pow(g.z1 / g.z0, e));
-    if (g.t >= 1) { scan.state = "running"; render(); }
-  } else if (scan.state === "running" && !el.keysDialog.open) {
+    if (g.t >= 1) {
+      render();
+      if (scan.firstFrame && prefs.scan.edge_s > 0) {
+        scan.state = "dwell-start";
+        scan.dwellUntil = t + prefs.scan.edge_s * 1000;
+      } else {
+        scan.state = "running";
+      }
+    }
+  } else if (scan.state === "dwell-start") {
+    if (t >= scan.dwellUntil) scan.state = "running";
+  } else if (scan.state === "running" && !dialog) {
     scan.d += prefs.scan.speed * dt / 1000 / scale();
     if (scan.d >= scan.path.total) {
       scan.d = scan.path.total;
       setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
-      finishScan();
-      return;
+      scan.atEnd = true;
+      scan.state = "dwell-end";
+      scan.dwellUntil = t + prefs.scan.edge_s * 1000;
+    } else {
+      setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
     }
-    setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
+  } else if (scan.state === "dwell-end") {
+    if (t >= scan.dwellUntil) { finishScan(); return; }
   }
   showScanPill(t);
   scan.raf = requestAnimationFrame(scanFrame);
 }
 
 function finishScan() {
-  scanMemory.delete(scanKey());   // next time this image starts from the top
+  scan.atEnd = false;
   if (prefs.scan.next_image && idx < images.length - 1) {
     flash("Scan finished: on to the next image");
-    scan.state = "loading";        // until load() has planned the next image
+    scan.state = "loading";          // until load() has set up the next image
     scan.raf = requestAnimationFrame(scanFrame);
     const from = idx;
     go(idx + 1).then(() => {
@@ -3681,63 +3807,111 @@ function finishScan() {
     : "Scan finished: that was the last image");
 }
 
-/** Called by load() for each new image while scanning is on: plan it, and
-    start after the usual resume pause, so there is a moment to look first. */
+/** Called by load() for each new image while scanning is on: a full pass,
+    at the zoom of the last one, after the usual resume pause - a moment to
+    look before it moves. */
 function scanNewImage() {
   if (!scan.on) return;
-  if (!planScan()) { stopScan(); return; }
+  scan.fresh = true;
+  scan.atEnd = false;
+  scan.path = null;
   scan.state = "paused";
   scan.lastTouch = performance.now();
 }
 
 let scanPillText = "";
 function showScanPill(t) {
-  let text, cls;
+  let text, cls = "wait";
+  const secs = (until) => Math.max(0, (until - t) / 1000).toFixed(1);
   if (scan.state === "loading") {
     text = "Scan: opening the next image";
-    cls = "wait";
   } else if (scan.state === "running") {
-    text = `Scanning ${prefs.scan.speed} px/s  ${Math.round(100 * scan.d / scan.path.total)} %`;
+    text = `Scanning ${SCAN_LEVELS[speedLevel()].name}  ${Math.round(100 * scan.d / scan.path.total)} %`;
     cls = "run";
   } else if (scan.state === "gliding") {
-    text = "Resuming the scan";
+    text = "Scan: moving into place";
     cls = "run";
+  } else if (scan.state === "dwell-start") {
+    text = `Scan: first view, ${secs(scan.dwellUntil)} s`;
+    cls = "run";
+  } else if (scan.state === "dwell-end") {
+    text = `Scan: last view, ${secs(scan.dwellUntil)} s`;
+    cls = "run";
+  } else if (scan.state === "held") {
+    text = "Scan held: s goes on from here";
   } else if (scanBlocked()) {
     text = el.keysDialog.open ? "Scan paused" : "Scan paused while you annotate";
-    cls = "wait";
   } else {
-    const left = Math.max(0, prefs.scan.resume_s - (t - scan.lastTouch) / 1000);
-    text = `Scan resumes in ${left.toFixed(1)} s`;
-    cls = "wait";
+    text = `Scan goes on in ${secs(scan.lastTouch + prefs.scan.resume_s * 1000)} s`;
   }
-  el.scanPill.hidden = false;
+  el.scanBar.hidden = false;
   if (text !== scanPillText) { el.scanText.textContent = text; scanPillText = text; }
   el.scanPill.dataset.state = cls;
+  if (document.activeElement !== el.scanEdge && Number(el.scanEdge.value) !== prefs.scan.edge_s) {
+    el.scanEdge.value = String(prefs.scan.edge_s);
+  }
+}
+
+// ---------------------------------------------------------------- speed levels
+
+for (let k = 0; k < SCAN_LEVELS.length; k++) {
+  const bar = document.createElement("i");
+  bar.style.height = `${5 + k * 2}px`;         // rising, like a signal meter
+  el.scanLevelBars.appendChild(bar);
+}
+
+let scanLevelTimer = 0;
+function showScanLevel() {
+  const i = speedLevel();
+  [...el.scanLevelBars.children].forEach((b, k) => b.classList.toggle("on", k <= i));
+  el.scanLevelName.textContent = SCAN_LEVELS[i].name;
+  el.scanLevel.hidden = false;
+  clearTimeout(scanLevelTimer);
+  scanLevelTimer = setTimeout(hideScanLevel, SCAN_LEVEL_SHOW_MS);
+}
+function hideScanLevel() {
+  clearTimeout(scanLevelTimer);
+  el.scanLevel.hidden = true;
 }
 
 let scanSaveTimer = 0;
+/** . and , - only while a scan is on; otherwise the keys do nothing. */
 function scanSpeed(dir) {
-  const i = SCAN_SPEEDS.reduce((best, v, k) =>
-    Math.abs(v - prefs.scan.speed) < Math.abs(SCAN_SPEEDS[best] - prefs.scan.speed) ? k : best, 0);
-  const j = clamp(i + dir, 0, SCAN_SPEEDS.length - 1);
-  prefs.scan.speed = SCAN_SPEEDS[j];
-  flash(j === i ? `Scan speed stays at ${prefs.scan.speed} px/s, the ${dir > 0 ? "fastest" : "slowest"}`
-                : `Scan speed ${prefs.scan.speed} px/s`);
+  if (!scan.on) return;
+  const j = clamp(speedLevel() + dir, 0, SCAN_LEVELS.length - 1);
+  prefs.scan.speed = SCAN_LEVELS[j].px;
+  showScanLevel();
   clearTimeout(scanSaveTimer);
   scanSaveTimer = setTimeout(saveSettings, 800);   // a burst of presses saves once
 }
 
-/** A resized window means another view size, so another path. Re-plan at the
-    scan's zoom and carry on from the same place on the image. */
-window.addEventListener("resize", () => {
-  if (!scan.on || !scan.path || !natW) return;
-  const here = pointAt(scan.path, scan.d);
-  scan.path = buildScanPath(scan.zoom);
-  if (!scan.path.total) { stopScan("Scanning stopped: the image fits on screen now"); return; }
-  scan.d = nearestOnPath(scan.path, here);
-  setViewCentre(pointAt(scan.path, scan.d), scan.zoom);
-  render();
+// The hold at the first and last view, in the small box beside the indicator.
+el.scanEdge.addEventListener("change", () => {
+  const v = clamp(Math.round((Number(el.scanEdge.value) || 0) * 2) / 2, 0, 10);
+  prefs.scan.edge_s = v;
+  el.scanEdge.value = String(v);
+  saveSettings();
 });
+el.scanEdge.addEventListener("keydown", (e) => {
+  // Enter or Esc hands the keyboard back to the editor.
+  if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); el.scanEdge.blur(); }
+});
+
+/** Another view size (a resized window, the image strip shown or hidden)
+    means another path: a new pass from the scan's place, at its zoom, in
+    its direction. Held at the last view, there is nothing to re-plan. */
+function replanScan() {
+  if (!scan.on || !scan.path || !natW || scan.atEnd) return;
+  const here = pointAt(scan.path, scan.d);
+  const dir = dirAt(scan.path, scan.d);
+  const moving = scanRunning();
+  if (!plan({ ...here, dir }, scan.zoom)) { stopScan(); return; }
+  if (moving) {
+    setViewCentre(pointAt(scan.path, 0), scan.zoom);
+    render();
+  }
+}
+window.addEventListener("resize", replanScan);
 
 /** The planned path on the minimap, faint, so it is clear where the scan
     goes next and how much is left. */
@@ -3759,8 +3933,9 @@ function scanSection() {
   const sc = prefs.scan;
   const sec = h("section", "keys-screen");
   sec.append(h("h3", "", "Scanning"),
-    h("p", "keyhint", "s starts or stops a scan of the image; . and , make it faster or slower. "
-      + "It pauses while you annotate and picks up where it left off."));
+    h("p", "keyhint", "s starts a scan from the view on screen, or from the first view when the "
+      + "whole image is on screen. Annotating pauses it and it goes on by itself; moving the view "
+      + "holds it until s, which goes on from the new view. While scanning, . and , set the speed."));
 
   const row = (key, label, hint, min, max, step, fmt, toValue = (v) => v, fromValue = (v) => v) => {
     const changed = sc[key] !== SCAN_DEFAULTS[key];
@@ -3802,23 +3977,300 @@ function scanSection() {
     l.append(c, h("span", "", label));
     return l;
   };
-  const speedIndex = (v) => SCAN_SPEEDS.reduce((best, s, k) =>
-    Math.abs(s - v) < Math.abs(SCAN_SPEEDS[best] - v) ? k : best, 0);
+  const levelOf = (px) => SCAN_LEVELS.reduce((best, l, k) =>
+    Math.abs(l.px - px) < Math.abs(SCAN_LEVELS[best].px - px) ? k : best, 0);
   sec.append(
-    row("speed", "Speed", "How fast the image slides by, on screen. The same as . and ,.",
-        0, SCAN_SPEEDS.length - 1, 1, (v) => `${v} px/s`,
-        (i) => SCAN_SPEEDS[i], speedIndex),
+    row("speed", "Speed", "The level a scan starts at; . and , change it while scanning.",
+        0, SCAN_LEVELS.length - 1, 1, (v) => SCAN_LEVELS[levelOf(v)].name,
+        (i) => SCAN_LEVELS[i].px, levelOf),
+    row("edge_s", "Hold first and last view", "How long the scan stays on the image's first view "
+        + "before it moves, and on its last before it ends. Also in the box beside the scan indicator.",
+        0, 10, 0.5, (v) => `${v} s`),
     row("overlap", "Row overlap", "How much of the view two rows share, so nothing falls between them.",
         0, 0.5, 0.05, (v) => `${Math.round(v * 100)} %`),
     row("resume_s", "Resume after", "Time without touching anything, once no box is being drawn, "
-        + "before the scan picks up again.", 0.5, 10, 0.5, (v) => `${v} s`),
-    check("skip_seen", "Skip rows already seen (by the minimap's rule), e.g. after a break"),
+        + "before a scan paused by annotating goes on.", 0.5, 10, 0.5, (v) => `${v} s`),
     check("next_image", "When an image is done, go on to the next one"));
   return sec;
 }
 
 const scanChangeCount = () =>
   Object.keys(SCAN_DEFAULTS).filter((k) => prefs.scan[k] !== SCAN_DEFAULTS[k]).length;
+
+// ---------------------------------------------------------------- image strip
+//
+// The images that come next, as thumbnails along the bottom: the one being
+// annotated at the left edge, the next ones after it. Near the end of the
+// project the last image stays at the right edge instead, and the current
+// one moves along towards it - the strip never runs out into empty space. Drag it (or scroll over
+// it) to look further ahead or back; a click without a drag opens the image
+// clicked. Moving to another image slides the strip so the new one is at the
+// left again.
+//
+// Only the tiles on screen exist, so a project of thousands of images costs
+// the same as one of ten.
+
+const STRIP_PAD = 8;               // px before the first tile
+const STRIP_GAP = 6;
+const STRIP_CLICK_PX = 5;          // more movement than this is a drag, not a click
+
+const strip = {
+  offset: 0,                       // px; 0 puts the current image at the left edge
+  laidOut: null,                   // the show/height last applied, see applyStripLayout
+  tiles: new Map(),                // project + "\0" + index -> element
+  press: null,                     // {x, offset, moved, t, v}
+  anim: 0,
+  frame: 0,
+};
+
+const stripTileW = () => Math.round(prefs.strip.height * 16 / 9);   // 16:9, like a wide frame
+const stripPitch = () => stripTileW() + STRIP_GAP;
+
+/** How far the strip may go: from image 1 at the left edge to the last image
+    at the right edge. A project that fits entirely stays with image 1 at the
+    left, since there is nothing to scroll. */
+function stripBounds() {
+  const p = stripPitch();
+  const max = idx * p;
+  const lastAtRight = el.strip.clientWidth - 2 * STRIP_PAD - stripTileW()
+                      - (images.length - 1 - idx) * p;
+  return [Math.min(max, lastAtRight), max];
+}
+function stripClamp(o) {
+  const [lo, hi] = stripBounds();
+  return clamp(o, lo, hi);
+}
+
+/** Where the strip rests: the current image at the left edge, as far as the
+    bounds allow - so at the end of the project the last image holds the
+    right edge and the current one sits wherever it falls. */
+const stripHome = () => stripClamp(0);
+
+function scheduleStrip() {
+  if (!strip.frame) strip.frame = requestAnimationFrame(renderStrip);
+}
+
+function stripState(im) {
+  return im.complete ? "s-done" : im.boxes > 0 ? "s-progress" : "s-todo";
+}
+
+function stripTile(i) {
+  const im = images[i];
+  const t = h("div", "stile");
+  const img = h("img");
+  img.alt = "";
+  img.draggable = false;
+  img.decoding = "async";
+  // The thumbnail must cover the tile's longer side, which is now its width.
+  img.src = thumbUrl(project, im.name, stripTileW() * (window.devicePixelRatio || 1) > 250 ? 512 : 256);
+  t.append(img, h("span", "sidx", String(i + 1)), h("span", "sbar"));
+  t.title = im.name;
+  return t;
+}
+
+function renderStrip() {
+  strip.frame = 0;
+  if (!prefs.strip.show || view !== "editor" || !images.length) return;
+  const W = el.strip.clientWidth, p = stripPitch();
+  strip.offset = stripClamp(strip.offset);
+  const first = Math.max(0, idx + Math.floor((-strip.offset - STRIP_PAD) / p) - 1);
+  const last = Math.min(images.length - 1, idx + Math.ceil((W - strip.offset) / p) + 1);
+  const keep = new Set();
+  for (let i = first; i <= last; i++) {
+    const key = project + "\u0000" + i;
+    keep.add(key);
+    let t = strip.tiles.get(key);
+    if (!t) {
+      t = stripTile(i);
+      strip.tiles.set(key, t);
+      el.stripTrack.appendChild(t);
+    }
+    t.style.transform = `translateX(${STRIP_PAD + (i - idx) * p + strip.offset}px)`;
+    const cls = `stile ${stripState(images[i])}${i === idx ? " current" : ""}`;
+    if (t.className !== cls) t.className = cls;
+  }
+  for (const [key, t] of strip.tiles) {
+    if (!keep.has(key)) { t.remove(); strip.tiles.delete(key); }
+  }
+}
+
+function stripAnimateTo(target, ms = 220) {
+  cancelAnimationFrame(strip.anim);
+  const from = strip.offset, t0 = performance.now();
+  const step = (t) => {
+    const k = Math.min(1, (t - t0) / ms), e = 1 - Math.pow(1 - k, 3);
+    strip.offset = from + (target - from) * e;
+    renderStrip();
+    if (k < 1) strip.anim = requestAnimationFrame(step);
+  };
+  strip.anim = requestAnimationFrame(step);
+}
+
+/** Called by load() when the image changes: keep every tile where it is for
+    a moment, then slide so the new current image ends up at the left. A jump
+    across the whole project just redraws. */
+function stripFollow(prev) {
+  const home = stripHome();
+  const shifted = strip.offset + (idx - prev) * stripPitch();
+  if (prev >= 0 && Math.abs(shifted - home) < 4 * el.strip.clientWidth) {
+    strip.offset = shifted;
+    stripAnimateTo(home);
+  } else {
+    strip.offset = home;
+    scheduleStrip();
+  }
+}
+
+// Dragging, with a little momentum on release, so a flick carries on.
+el.strip.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  cancelAnimationFrame(strip.anim);
+  strip.press = { x: e.clientX, offset: strip.offset, moved: 0, t: e.timeStamp, v: 0, lastX: e.clientX };
+  el.strip.setPointerCapture(e.pointerId);
+});
+el.strip.addEventListener("pointermove", (e) => {
+  const pr = strip.press;
+  if (!pr) return;
+  pr.moved = Math.max(pr.moved, Math.abs(e.clientX - pr.x));
+  if (pr.moved > STRIP_CLICK_PX) el.strip.classList.add("dragging");
+  const dt = Math.max(1, e.timeStamp - pr.t);
+  pr.v = 0.8 * ((e.clientX - pr.lastX) / dt) + 0.2 * pr.v;   // px per ms, smoothed
+  pr.t = e.timeStamp;
+  pr.lastX = e.clientX;
+  strip.offset = stripClamp(pr.offset + e.clientX - pr.x);
+  scheduleStrip();
+});
+el.strip.addEventListener("pointerup", (e) => {
+  const pr = strip.press;
+  strip.press = null;
+  el.strip.classList.remove("dragging");
+  if (!pr) return;
+  if (pr.moved <= STRIP_CLICK_PX) {
+    // A click: the tile under the pointer, not a gap between two.
+    const x = e.clientX - el.strip.getBoundingClientRect().left - STRIP_PAD - strip.offset;
+    const k = Math.floor(x / stripPitch());
+    if (x - k * stripPitch() <= stripTileW()) {
+      const i = idx + k;
+      if (i >= 0 && i < images.length && i !== idx) go(i);
+    }
+    return;
+  }
+  // Momentum only for a release while still moving: stop, then let go, and
+  // the strip stays where it was put.
+  let v = e.timeStamp - pr.t > 80 ? 0 : pr.v;
+  if (Math.abs(v) < 0.05) return;
+  let last = performance.now();
+  const coast = (t) => {
+    const dt = t - last;
+    last = t;
+    v *= Math.pow(0.994, dt);                 // friction
+    const before = strip.offset;
+    strip.offset = stripClamp(strip.offset + v * dt);
+    renderStrip();
+    if (Math.abs(v) > 0.02 && strip.offset !== before) strip.anim = requestAnimationFrame(coast);
+  };
+  strip.anim = requestAnimationFrame(coast);
+});
+el.strip.addEventListener("pointercancel", () => {
+  strip.press = null;
+  el.strip.classList.remove("dragging");
+});
+el.strip.addEventListener("wheel", (e) => {
+  e.preventDefault();
+  cancelAnimationFrame(strip.anim);
+  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+  strip.offset = stripClamp(strip.offset - d * (e.deltaMode === 1 ? 33 : 1));
+  scheduleStrip();
+}, { passive: false });
+
+/** Show, hide or resize the strip without re-fitting the image: whatever was
+    in the middle of the view stays there, and a running scan re-plans for the
+    new view size. */
+function applyStripLayout() {
+  // Called with every settings change; only a change to the strip itself
+  // re-lays it out, so a strip dragged aside stays put when, say, the
+  // minimap is toggled.
+  const key = `${prefs.strip.show}:${prefs.strip.height}`;
+  if (key === strip.laidOut) { scheduleStrip(); return; }
+  strip.laidOut = key;
+  const c = natW && view === "editor" ? viewCentre() : null;
+  el.strip.hidden = !prefs.strip.show;
+  el.strip.style.setProperty("--strip-h", prefs.strip.height + "px");
+  el.strip.style.setProperty("--strip-w", stripTileW() + "px");
+  if (c) {
+    setViewCentre(c, zoom);
+    render();
+  }
+  replanScan();
+  schedulePointer();
+  strip.offset = stripHome();
+  scheduleStrip();
+}
+
+function toggleStrip() {
+  prefs.strip.show = !prefs.strip.show;
+  saveSettings();
+  flash(prefs.strip.show ? "Image strip shown" : "Image strip hidden: t shows it");
+}
+
+// ---------------------------------------------------------------- settings section
+
+function stripSection() {
+  const sc = prefs.strip;
+  const sec = h("section", "keys-screen");
+  sec.append(h("h3", "", "Image strip"),
+    h("p", "keyhint", "The next images along the bottom, the current one at the left. Drag or "
+      + "scroll it to look ahead or back; click an image to open it. t shows or hides it."));
+  const toggle = h("label", "stylefield toggle mmtoggle");
+  const c = h("input");
+  c.type = "checkbox";
+  c.checked = sc.show;
+  c.dataset.f = "strip:show";
+  c.addEventListener("change", () => { sc.show = c.checked; saveSettings(); });
+  toggle.append(c, h("span", "", "Show the image strip"));
+  sec.appendChild(toggle);
+
+  const changed = sc.height !== STRIP_DEFAULTS.height;
+  const r = h("div", "keyrow speed" + (changed ? " changed" : ""));
+  const lab = h("label", "keylabel");
+  lab.htmlFor = "strip-height";
+  lab.append("Height", h("span", "sub", "Of the thumbnails. The image gets what is left."));
+  const wrap = h("span", "chips");
+  const input = h("input");
+  input.type = "range"; input.id = "strip-height";
+  input.min = "56"; input.max = "200"; input.step = "4";
+  input.value = String(sc.height);
+  input.dataset.f = "strip:height";
+  const out = h("output", "speedval", `${sc.height} px`);
+  input.addEventListener("input", () => {
+    sc.height = Number(input.value);
+    out.textContent = `${sc.height} px`;
+    for (const t of strip.tiles.values()) t.remove();
+    strip.tiles.clear();
+    applyStripLayout();
+  });
+  input.addEventListener("change", () => saveSettings());
+  wrap.append(input, out);
+  const actions = h("span", "keyactions");
+  if (changed) {
+    const reset = h("button", "badge", "reset");
+    reset.type = "button";
+    reset.dataset.f = "strip:height:reset";
+    reset.addEventListener("click", () => {
+      sc.height = STRIP_DEFAULTS.height;
+      for (const t of strip.tiles.values()) t.remove();
+      strip.tiles.clear();
+      saveSettings();
+    });
+    actions.appendChild(reset);
+  }
+  r.append(lab, wrap, actions);
+  sec.appendChild(r);
+  return sec;
+}
+
+const stripChangeCount = () =>
+  Object.keys(STRIP_DEFAULTS).filter((k) => prefs.strip[k] !== STRIP_DEFAULTS[k]).length;
 
 // ---------------------------------------------------------------- small commands
 
@@ -3914,7 +4366,8 @@ el.flag.addEventListener("click", () => toggleComplete());
 window.addEventListener("resize", () => {
   if (view !== "editor") return;   // a hidden viewport measures 0 x 0
   if (natW) fitToViewport();
-  drawRibbon();
+  strip.offset = stripHome();      // another width, another resting place
+  scheduleStrip();
 });
 window.addEventListener("beforeunload", (e) => {
   if (!dirty) return;
@@ -4112,11 +4565,17 @@ function renderProjects() {
     if (p.name === last) card.classList.add("last");
 
     const cover = h("div", "cover");
-    if (p.cover) {
-      const img = h("img");
-      img.alt = ""; img.loading = "lazy"; img.decoding = "async";
-      img.src = thumbUrl(p.name, p.cover, 512);
-      cover.appendChild(img);
+    const names = p.covers || [];
+    for (let k = 0; k < 3; k++) {
+      const cell = h("span", "cover-cell");     // an empty cell when there are fewer
+      if (names[k]) {
+        const img = h("img");
+        img.alt = ""; img.loading = "lazy"; img.decoding = "async";
+        img.src = thumbUrl(p.name, names[k], 256);
+        img.title = names[k];
+        cell.appendChild(img);
+      }
+      cover.appendChild(cell);
     }
 
     const body = h("div", "body");
@@ -4214,7 +4673,7 @@ function showDataset() {
   renderGrid();
 
   // Coming back from the editor: put the image you just left in view, ringed
-  // in the ribbon's cursor colour, and give it focus so Enter reopens it.
+  // in the "you are here" colour, and give it focus so Enter reopens it.
   const t = lastOpened && [...el.grid.children].find((c) => c.dataset.name === lastOpened);
   if (t) {
     t.scrollIntoView({ block: "center" });
