@@ -31,7 +31,10 @@ strip:
   fill: [114, 114, 114]       # neutral grey for unused strip area
 inference:
   text_prompt: "crow"           # e.g. "rumex" to combine text + exemplars
-  class_id: 0                 # null = accept every class id
+  class_name: crow            # every prediction is written as this class; one
+                              # word, and a class on the project's list in the
+                              # annotator, so approving a prediction keeps it.
+                              # A manifest run uses only exemplars of this class.
   conf_threshold: 0.05         # written to disk; the UI filters higher, not this
   max_edge: 2048              # cap the TARGET's long edge before compositing
   fast_prompt_append: true
@@ -39,6 +42,9 @@ dataset:
   num_images: null            # null = every image; int = random subset
   image_seed: 0
   image_exts: [".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"]
+  gt_class: null              # which class of the gt/ labels to sample from
+                              # (random_gt) and draw; 0, "0.0" and names all
+                              # work. null = every class
 predictions:
   provenance: sam3
   quality: unverified

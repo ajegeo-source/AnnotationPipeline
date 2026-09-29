@@ -369,6 +369,68 @@
   .scanpill i { width: 7px; height: 7px; border-radius: 50%; background: var(--done); }
   .scanpill[data-state="wait"] i { background: var(--exem); }
 
+  /* ------------------------------------------------ classes, comments */
+  .classchip {
+    display: inline-flex; align-items: center; gap: 7px; max-width: 220px;
+    padding: 2px 9px; border: 1px solid var(--line); border-radius: 2px;
+    background: var(--bg); color: var(--text); font: 12px/1.6 var(--mono); cursor: pointer;
+  }
+  .classchip:hover, .classchip[aria-expanded="true"] { border-color: var(--dim); }
+  .classchip i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .classchip span { overflow: hidden; text-overflow: ellipsis; }
+  .classmenu {
+    position: fixed; z-index: 20; min-width: 200px; max-height: 60vh; overflow: auto; padding: 4px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .45);
+  }
+  .classmenu[hidden] { display: none; }
+  .classitem {
+    display: flex; align-items: center; gap: 9px; width: 100%; padding: 5px 8px; border: 0;
+    background: none; color: var(--text); font: 12px/1.5 var(--mono); text-align: left;
+    border-radius: 2px; cursor: pointer;
+  }
+  .classitem:hover, .classitem:focus-visible { background: rgba(255, 255, 255, .06); outline: none; }
+  .classitem.on { background: rgba(168, 85, 247, .16); }
+  .classitem .k { width: 12px; color: var(--dim); }
+  .classitem i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .classitem.edit { color: var(--dim); border-top: 1px solid var(--line); border-radius: 0; margin-top: 4px; }
+  .classkey { width: 12px; font: 12px var(--mono); color: var(--dim); text-align: right; }
+  .keyrow.addclass { grid-template-columns: auto auto 1fr; margin: 8px 0 0 8px; }
+
+  .pins { position: absolute; inset: 0; pointer-events: none; z-index: 1; }
+  /* A speech bubble whose bottom-left corner is the point it is about. */
+  .pin {
+    position: absolute; transform: translate(-1px, -100%); pointer-events: auto;
+    min-width: 20px; height: 20px; padding: 0 5px; cursor: pointer;
+    font: 600 11px/18px var(--mono); color: #0d1114; background: #f5f5f4;
+    border: 1px solid #0d1114; border-radius: 9px 9px 9px 0;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, .5);
+  }
+  .pin.resolved { background: #8b939e; opacity: .75; }
+  .pin.open, .pin:hover { background: var(--exem); }
+  .pin:focus-visible { outline: 2px solid var(--human); outline-offset: 2px; }
+  .cpop {
+    position: absolute; z-index: 3; width: 280px; padding: 9px 10px;
+    background: rgba(13, 15, 18, .95); border: 1px solid var(--line); border-radius: 3px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, .5); font-size: 12px;
+  }
+  .cpop[hidden] { display: none; }
+  .cpop-meta { color: var(--dim); margin-bottom: 6px; }
+  .cpop textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 58px;
+    padding: 5px 7px; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 2px; font: 12px/1.45 inherit;
+  }
+  .cpop textarea:focus { outline: none; border-color: var(--human); }
+  .cpop-actions { display: flex; gap: 6px; align-items: center; margin-top: 7px; }
+  .viewport.placing, .viewport.placing svg { cursor: cell !important; }
+  /* Area select: a light blue that is no class's and no source's colour. */
+  .stage rect.marquee {
+    stroke: #8ecbff; stroke-width: 1.5px; stroke-dasharray: 6 4; fill: rgba(142, 203, 255, .12);
+  }
+  .viewport.selecting, .viewport.selecting svg { cursor: crosshair !important; }
+  #areaBtn.on { color: #0d1114; background: #8ecbff; border-color: #8ecbff; }
+
   .timer { font-family: var(--mono); font-size: 12px; color: var(--dim);
            font-variant-numeric: tabular-nums; white-space: nowrap; }
   .timer.idle { opacity: .45; }
@@ -569,6 +631,8 @@
   <span class="predcount" id="predcount"></span>
   <span class="exemcount" id="exemcount"></span>
   <span class="spacer"></span>
+  <button class="badge" id="areaBtn" type="button" aria-pressed="false" title="Select the boxes inside a rectangle you drag (v)">select area</button>
+  <button class="classchip" id="classChip" type="button" aria-haspopup="menu" aria-expanded="false"><i id="classSwatch"></i><span id="classChipName"></span></button>
   <button class="badge" id="mode"
           title="e &mdash; draw annotations, or pick exemplars for the SAM3 prompt">annotating</button>
   <span class="thresh">
@@ -605,6 +669,18 @@
     <div class="mm-foot"><span id="mmZoom"></span><span id="mmNote"></span></div>
     <span class="mm-grip" id="mmGrip" title="Drag to move the minimap"></span>
   </div>
+  <div class="pins" id="pins"></div>
+  <div class="cpop" id="cpop" hidden role="dialog" aria-label="Comment">
+    <div class="cpop-meta" id="cpopMeta"></div>
+    <textarea id="cpopText" rows="3" maxlength="4000" placeholder="What is there to say about this spot?"></textarea>
+    <div class="cpop-actions">
+      <button class="badge" id="cpopSave" type="button">save</button>
+      <button class="badge" id="cpopResolve" type="button">resolve</button>
+      <button class="badge danger" id="cpopDelete" type="button">delete</button>
+      <span class="dialog-spacer"></span>
+      <button class="badge" id="cpopClose" type="button">close</button>
+    </div>
+  </div>
   <div class="toast" id="toast" role="status" aria-live="polite"></div>
   <div class="hint" id="hint">
     <div class="help-keys" id="helpKeys"></div>
@@ -617,6 +693,8 @@
   <div class="strip-track" id="stripTrack"></div>
 </div>
 </section>
+
+<div class="classmenu" id="classMenu" role="menu" hidden></div>
 
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
   <div class="keys-head">
@@ -766,6 +844,19 @@ const el = {
   mmNote: document.getElementById("mmNote"),
   mmFoot: document.querySelector("#minimap .mm-foot"),
   scanPill: document.getElementById("scanPill"),
+  classChip: document.getElementById("classChip"),
+  areaBtn: document.getElementById("areaBtn"),
+  classSwatch: document.getElementById("classSwatch"),
+  classChipName: document.getElementById("classChipName"),
+  classMenu: document.getElementById("classMenu"),
+  pins: document.getElementById("pins"),
+  cpop: document.getElementById("cpop"),
+  cpopMeta: document.getElementById("cpopMeta"),
+  cpopText: document.getElementById("cpopText"),
+  cpopSave: document.getElementById("cpopSave"),
+  cpopResolve: document.getElementById("cpopResolve"),
+  cpopDelete: document.getElementById("cpopDelete"),
+  cpopClose: document.getElementById("cpopClose"),
   scanBar: document.getElementById("scanBar"),
   scanEdge: document.getElementById("scanEdge"),
   scanLevel: document.getElementById("scanLevel"),
@@ -789,6 +880,7 @@ const scale = () => fit * zoom;
 function applyTransform() {
   el.stage.style.transform = `translate(${panX}px, ${panY}px) scale(${scale()})`;
   scheduleMinimap();
+  schedulePins();                    // pins stay on their spot, at screen size
 }
 
 function fitToViewport() {
@@ -843,7 +935,7 @@ window.addEventListener("mouseup", (e) => {
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 function normalise(b) {
-  if (!Number.isInteger(b.cls)) b.cls = 0;
+  if (typeof b.cls !== "string" || !b.cls) b.cls = activeClass || DEFAULT_CLASS_NAME;
   const x1 = Math.min(b.x1, b.x2), x2 = Math.max(b.x1, b.x2);
   const y1 = Math.min(b.y1, b.y2), y2 = Math.max(b.y1, b.y2);
   b.x1 = x1; b.x2 = x2; b.y1 = y1; b.y2 = y2;
@@ -863,7 +955,7 @@ function iou(a, b) {
 const listOf = (kind) =>
   kind === "pred" ? preds : kind === "exem" ? exems : boxes;
 const at = (s) => (s ? listOf(s.kind)[s.i] : null);
-const isSel = (kind, i) => !!sel && sel.kind === kind && sel.i === i;
+const isSel = (kind, i) => (!!sel && sel.kind === kind && sel.i === i) || inMulti(kind, i);
 const shownPreds = () => preds.filter((b) => b.score >= threshold);
 const fromSam3 = (b) => b.provenance !== PROV_HUMAN;
 
@@ -947,6 +1039,8 @@ let drag = null;    // an existing box being moved or resized
     or start a new box. */
 let drawHintShown = false;
 function pointerEditStart(e) {
+  if (commentPlacing) { placeComment(toImage(e)); return; }
+  if (marqueeArmed) { startMarquee(e, toImage(e)); return; }
   if (peeking) return;
   if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
   const p = toImage(e);
@@ -957,7 +1051,10 @@ function pointerEditStart(e) {
   }
   const hit = hitTest(p);
   if (hit) {
-    sel = { kind: hit.kind, i: hit.i };
+    // `picked`: chosen by clicking it, as opposed to selected automatically
+    // after drawing, pasting or approving (see below).
+    sel = { kind: hit.kind, i: hit.i, picked: true };
+    multi = [];
     if (hit.mode !== "pick") {
       const b = at(sel);
       drag = {
@@ -966,6 +1063,17 @@ function pointerEditStart(e) {
         before: snapshot(),          // for undo, if the drag changes anything
       };
     }
+    render();
+    return;
+  }
+  // A box you clicked to select: the next press on empty space means "done
+  // with that box", not "start another" - it deselects and nothing more, and
+  // the press after that draws. A box selected automatically (just drawn,
+  // pasted or approved) does not hold up the next box: drawing one after
+  // another stays two clicks each.
+  if ((sel && sel.picked) || multi.length) {
+    sel = null;
+    multi = [];
     render();
     return;
   }
@@ -1082,15 +1190,18 @@ async function endDraft() {
     render();                       // clear the draft while the POST is in flight
     id = await postExemplar(box);
     if (id === null) return;
-    exems.push({ id, ...box });
+    exems.push({ id, ...box, cls: activeClass });   // as the manifest has it
     sel = { kind: "exem", i: exems.length - 1 };
   }
   boxes.push({ ...box, cls: activeClass, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
+  seenClasses.add(activeClass);
   if (!picking) sel = { kind: "box", i: boxes.length - 1 };
   const events = [logEvent("box.draw", { box: nb(box), cls: activeClass, provenance: PROV_HUMAN })];
   if (picking) {
     events.push(logEvent("exemplar.pick", { id, box: nb(box) }));
-    record("exemplar pick", before, events, { exemplar: { kind: "pick", id, box } });
+    // With its class, so a redo re-picks it as the same class, whatever class
+    // is chosen by then.
+    record("exemplar pick", before, events, { exemplar: { kind: "pick", id, box: { ...box, cls: activeClass } } });
   } else {
     record("new box", before, events);
   }
@@ -1130,22 +1241,26 @@ function approve(i, bulk) {
   const p = preds[i];
   if (!p) return null;
   const provenance = p.edited ? PROV_SAM3_ADJUSTED : PROV_SAM3_ASIS;
+  // A prediction keeps its class if it is one of the project's; otherwise (the
+  // predictor still writes numbers) it takes the class new boxes get.
+  const cls = classList().includes(p.cls) ? p.cls : activeClass;
   boxes.push({
     x1: p.x1, y1: p.y1, x2: p.x2, y2: p.y2,
-    cls: p.cls,
+    cls,
     provenance,
     quality: "verified",
     score: p.score,
   });
   preds.splice(i, 1);
-  return logEvent("pred.approve", { box: nb(p), cls: p.cls, score: p.score, provenance, bulk });
+  return logEvent("pred.approve", { box: nb(p), cls, from_cls: p.cls, score: p.score, provenance, bulk });
 }
 
 function approveSelected() {
+  if (multi.length) { approveMulti(); return; }
   if (!sel || sel.kind !== "pred") return;
   const before = snapshot();
   const ev = approve(sel.i, false);
-  sel = null;
+  sel = { kind: "box", i: boxes.length - 1 };   // still selected: 1-9 can set its class now
   record("approval", before, [ev]);
   touch();
   render();
@@ -1172,6 +1287,7 @@ function approveShown() {
     un-picked. A rejection only hides the box on screen - predictions are read
     only - but it is now logged, so it counts in any acceptance statistic. */
 function deleteSelected() {
+  if (multi.length) { deleteMulti(); return; }
   if (!sel) return;
   if (sel.kind === "exem") { dropExemplar(sel.i); return; }
   const before = snapshot();
@@ -1215,7 +1331,7 @@ async function postExemplar(box) {
     const r = await fetch(q(`api/exemplar/${encodeURIComponent(images[idx].name)}`), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(box),
+      body: JSON.stringify({ ...box, cls: box.cls || activeClass }),
     });
     const body = await r.json();
     if (!r.ok) {
@@ -1254,7 +1370,7 @@ async function dropExemplar(i) {
   if (!(await deleteExemplar(e.id))) return;
   exems.splice(i, 1);
   sel = null;
-  const box = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2 };
+  const box = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, cls: e.cls };
   const ev = logEvent("exemplar.drop", { id: e.id, box: nb(box) });
   record("exemplar un-pick", before, [ev], { exemplar: { kind: "drop", id: e.id, box } });
   render();
@@ -1323,6 +1439,7 @@ function render() {
       rect({ x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 }, "draft"),
       mode === "exemplar" ? exemStyle : classStyle(activeClass), { draft: true }));
   }
+  renderMarquee();
   // No handles on an exemplar: it cannot be dragged, and offering a grip that
   // does nothing is worse than offering none.
   const active = at(sel);
@@ -1333,6 +1450,7 @@ function render() {
 
 function renderCounts(shown) {
   scheduleMinimap();                 // the dots follow the boxes
+  schedulePins();
   scheduleStrip();                   // and the strip's status bars
   const derived = boxes.filter(fromSam3).length;
   el.boxcount.textContent =
@@ -1404,7 +1522,12 @@ async function load(i) {
   exems = (data.exemplars || []).map(normalise);
   complete = data.complete;
   const before = seenClasses.size;
-  for (const b of [...boxes, ...preds]) seenClasses.add(b.cls);
+  for (const b of boxes) seenClasses.add(b.cls);   // not predictions: "0" is not a class here
+  comments = data.comments || [];
+  multi = [];
+  disarmMarquee();
+  closeCommentPopup();
+  cancelCommentPlacement();
   if (seenClasses.size !== before) renderLegend();
   sel = null;
   draft = null;
@@ -1636,6 +1759,7 @@ function restore(s) {
   exems = clone(s.exems);
   complete = s.complete;
   sel = null;
+  multi = [];
 }
 
 /** Push one finished edit. `before` was taken before the mutation; the state
@@ -1664,7 +1788,7 @@ async function stepHistory(dir) {
   const [from, to] = dir === "undo" ? [h.undo, h.redo] : [h.redo, h.undo];
   const e = from.pop();
   if (!e) { flash(`nothing to ${dir}`); return; }
-  if (e.exemplar && !(await exemplarSide(e, dir))) { from.push(e); return; }
+  if ((e.exemplar || e.exemplars) && !(await exemplarSide(e, dir))) { from.push(e); return; }
   restore(dir === "undo" ? e.before : e.after);
   to.push(e);
   logEvent("history." + dir, { of: e.events, label: e.label });
@@ -1678,14 +1802,19 @@ async function stepHistory(dir) {
     server hands out ids, so every entry that mentions the old one is updated.
     A re-added exemplar goes to the END of the pick order. */
 async function exemplarSide(e, dir) {
-  const add = (e.exemplar.kind === "pick") === (dir === "redo");
-  if (add) {
-    const id = await postExemplar(e.exemplar.box);
-    if (id === null) return false;
-    retagExemplar(e, e.exemplar.id, id);
-    return true;
+  // One step may hold several exemplar changes (a selection deleted at once);
+  // they are replayed in pick order, so re-added exemplars keep their order.
+  for (const op of e.exemplars || [e.exemplar]) {
+    const add = (op.kind === "pick") === (dir === "redo");
+    if (add) {
+      const id = await postExemplar(op.box);
+      if (id === null) return false;
+      retagExemplar(e, op.id, id);
+    } else if (!(await deleteExemplar(op.id))) {
+      return false;
+    }
   }
-  return deleteExemplar(e.exemplar.id);
+  return true;
 }
 
 function retagExemplar(current, oldId, newId) {
@@ -1694,7 +1823,9 @@ function retagExemplar(current, oldId, newId) {
     for (const s of [entry.before, entry.after]) {
       for (const x of s.exems) if (x.id === oldId) x.id = newId;
     }
-    if (entry.exemplar && entry.exemplar.id === oldId) entry.exemplar.id = newId;
+    for (const op of entry.exemplars || (entry.exemplar ? [entry.exemplar] : [])) {
+      if (op.id === oldId) op.id = newId;
+    }
   }
 }
 
@@ -1762,8 +1893,16 @@ const COMMANDS = {
                          keys: ["Ctrl+z"], repeat: true, run: () => queueHistory("undo") },
   "edit.redo":         { screen: "editor", group: "Edit", label: "Redo",
                          keys: ["Ctrl+y", "Ctrl+Shift+z"], repeat: true, run: () => queueHistory("redo") },
-  "edit.delete":       { screen: "editor", group: "Edit", label: "Delete yours, reject sam3, unpick exemplar",
+  "edit.delete":       { screen: "editor", group: "Edit", label: "Delete the selection: yours go, sam3 rejected, exemplars un-picked",
                          keys: ["Delete", "Backspace"], run: () => deleteSelected() },
+  "edit.copy":         { screen: "editor", group: "Edit", label: "Copy the selected box, or all yours with none selected",
+                         keys: ["Ctrl+c"], run: () => copyBoxes() },
+  "edit.paste":        { screen: "editor", group: "Edit", label: "Paste, in the same place on the image",
+                         keys: ["Ctrl+v"], run: () => pasteBoxes(false) },
+  "edit.pasteHere":    { screen: "editor", group: "Edit", label: "Paste at the pointer",
+                         keys: ["Ctrl+Shift+v"], run: () => pasteBoxes(true) },
+  "comment.add":       { screen: "editor", group: "Edit", label: "Comment: then click where it goes",
+                         keys: ["c"], run: () => startCommentPlacement() },
   "image.signoff":     { screen: "editor", group: "Edit", label: "Sign off, or reopen",
                          keys: ["f"], run: () => toggleComplete() },
 
@@ -1775,6 +1914,18 @@ const COMMANDS = {
   "mode.exemplar":     { screen: "editor", group: "Exemplars", label: "Switch between annotating and picking exemplars",
                          keys: ["e"], run: () => toggleMode() },
 
+  "pan.left":          { screen: "editor", group: "View", label: "Pan left (hold; with shift, faster)",
+                         kind: "hold", keys: ["ArrowLeft", "Shift+ArrowLeft"], scanView: true,
+                         run: (down) => keyPanHold("left", down) },
+  "pan.right":         { screen: "editor", group: "View", label: "Pan right (hold; with shift, faster)",
+                         kind: "hold", keys: ["ArrowRight", "Shift+ArrowRight"], scanView: true,
+                         run: (down) => keyPanHold("right", down) },
+  "pan.up":            { screen: "editor", group: "View", label: "Pan up (hold; with shift, faster)",
+                         kind: "hold", keys: ["ArrowUp", "Shift+ArrowUp"], scanView: true,
+                         run: (down) => keyPanHold("up", down) },
+  "pan.down":          { screen: "editor", group: "View", label: "Pan down (hold; with shift, faster)",
+                         kind: "hold", keys: ["ArrowDown", "Shift+ArrowDown"], scanView: true,
+                         run: (down) => keyPanHold("down", down) },
   "view.fit":          { screen: "editor", group: "View", label: "Fit the image to the screen",
                          keys: ["0"], scanView: true, run: () => fitToViewport() },
   "view.boxes":        { screen: "editor", group: "View", label: "Show or hide all boxes",
@@ -1795,9 +1946,50 @@ const COMMANDS = {
                          keys: ["?"], scanSafe: true, run: () => toggleHelp() },
 };
 
+// 1-9 pick the first nine classes of the project's list - for new boxes, and
+// for the selected box if there is one. Generated, since only the number
+// differs; "next class" is for lists longer than nine, and has no key yet.
+for (let n = 1; n <= 9; n++) {
+  COMMANDS[`class.pick${n}`] = {
+    screen: "editor", group: "Classes", label: `Class ${n} of the list`,
+    keys: [String(n)], run: () => pickClass(n - 1),
+  };
+}
+COMMANDS["class.next"] = {
+  screen: "editor", group: "Classes", label: "Next class on the list",
+  keys: [], run: () => nextClass(),
+};
+
+// Selecting several boxes at once (see the selection module). Ctrl + a class's
+// number selects its boxes - but Chrome and Edge keep Ctrl+1 to Ctrl+9 for
+// switching tabs, so there the page may never see them: rebind here, or
+// ctrl-click the class in the header's class list, which always works.
+COMMANDS["select.all"] = {
+  screen: "editor", group: "Select", label: "Select every box on the image",
+  keys: ["Ctrl+a"], run: () => selectAll(),
+};
+COMMANDS["select.area"] = {
+  screen: "editor", group: "Select", label: "Select the boxes inside a rectangle: then drag",
+  keys: ["v"], run: () => toggleMarquee(),
+};
+COMMANDS["select.exemplars"] = {
+  screen: "editor", group: "Select", label: "Select all exemplars",
+  keys: ["Ctrl+e"], run: () => selectExemplars(),
+};
+COMMANDS["select.predictions"] = {
+  screen: "editor", group: "Select", label: "Select all sam3 boxes",
+  keys: ["Ctrl+p"], run: () => selectPredictions(),
+};
+for (let n = 1; n <= 9; n++) {
+  COMMANDS[`select.class${n}`] = {
+    screen: "editor", group: "Select", label: `Select all boxes of class ${n}`,
+    keys: [`Ctrl+${n}`], run: () => selectClass(n - 1),
+  };
+}
+
 // ---------------------------------------------------------------- settings
 
-const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1, draw: "clicks" };
+const POINTER_DEFAULTS = { pan_gain: 1, zoom_speed: 1, draw: "clicks", key_pan: 700 };
 const MINIMAP_DEFAULTS = { show: true, size: 220, opacity: 0.85, right: 12, top: 12,
                            min_zoom: 2 };
 const SCAN_DEFAULTS = { speed: 130, edge_s: 1, overlap: 0.2, resume_s: 2, next_image: false };
@@ -1994,7 +2186,7 @@ function releaseAll() {
 /** Clicks and the wheel act on the image only. Everywhere else - buttons,
     lists, the grid - they keep doing what they always do. */
 const overImage = (e) => view === "editor" && !!natW && el.viewport.contains(e.target)
-  && !(e.target.closest && e.target.closest(".minimap, .scanbar"));
+  && !(e.target.closest && e.target.closest(".minimap, .scanbar, .pin, .cpop"));
 
 function pointerCtx(e) {
   const r = el.viewport.getBoundingClientRect();
@@ -2122,9 +2314,11 @@ function renderHelp() {
   }
   el.helpKeys.replaceChildren(frag);
   el.helpMouse.textContent = prefs.pointer.draw === "drag"
-    ? "Drawing: drag on empty space for a new box, on a box to move it, on a corner to resize."
+    ? "Drawing: drag on empty space for a new box, on a box to move it, on a corner to resize. "
+      + "After clicking a box to select it, a click on empty space only deselects it."
     : "Drawing: click on empty space to start a box and click again to finish it (esc cancels). "
-      + "Drag a box to move it, a corner to resize it.";
+      + "Drag a box to move it, a corner to resize it. After clicking a box to select it, a "
+      + "click on empty space only deselects it.";
 }
 
 const K_HELP = "al.help";
@@ -2312,7 +2506,7 @@ el.keysResetAll.addEventListener("click", () => {
     prefs.minimap = { ...MINIMAP_DEFAULTS };
     prefs.strip = { ...STRIP_DEFAULTS };
     mmBase = null;
-    for (const id of Object.keys(projectPrefs.classes)) setClass(Number(id), { style: undefined });
+    for (const c of projectPrefs.classes) delete c.style;
     saveSettings();
     if (project) saveProjectSettings();
     return;
@@ -2507,7 +2701,8 @@ function speedSection() {
              "How far the image moves when you drag it. At 1\u00d7 it stays under the cursor."),
     speedRow("zoom_speed", "Zoom speed",
              "How much one wheel notch, or one zoom key press, zooms in or out."),
-    drawModeRow());
+    drawModeRow(),
+    keyPanRow());
   return sec;
 }
 
@@ -2659,30 +2854,51 @@ const STYLE_DEFAULTS = {
   cursor:     { show: true, color: "#ffffff", width: 1.5, opacity: 1, line: "solid", size: 22 },
   crosshair:  { show: true, color: "#ffffff", width: 1, opacity: 0.5, line: "dashed" },
 };
-function classDefault(id) {
-  return { color: PALETTE[id % PALETTE.length], fill: 0, width: 2, opacity: 1, line: "solid" };
+/** A class without a style of its own takes a palette colour by its place in
+    the class list, so the first classes are always easy to tell apart. */
+function classDefault(name) {
+  const i = Math.max(0, classList().indexOf(name));
+  return { color: PALETTE[i % PALETTE.length], fill: 0, width: 2, opacity: 1, line: "solid" };
 }
 
 const STYLE_KEYS = ["show", "color", "fill", "width", "opacity", "line", "size"];
 const sameStyle = (a, b) => STYLE_KEYS.every((k) => a[k] === b[k]);
 
-let projectPrefs = { version: 1, classes: {} };
+// The project's classes are NAMES: what the list here says is what the
+// annotation files say, with no numbers in between.
+let projectPrefs = { version: 2, classes: [] };   // [{name, style?}], in hotkey order
 let projectPrefsPath = "";
-let seenClasses = new Set([0]);
-let activeClass = 0;         // the class new boxes get; switching comes later
+let seenClasses = new Set();     // class names this project's annotations use
+let classCounts = null;          // name -> boxes, fetched when the list is shown
+let activeClass = "";            // the class new boxes get
+const DEFAULT_CLASS_NAME = "object";   // for a project with no class at all yet
+const K_ACTIVE_CLASS = (p) => `al.class:${p}`;
+
+const validClassName = (n) => n.length > 0 && n.length <= 64 && !/[\s\x00-\x1f]/.test(n);
+const classEntry = (name) => projectPrefs.classes.find((c) => c.name === name);
 
 function styleOf(key) { return { ...STYLE_DEFAULTS[key], ...(prefs.styles[key] || {}) }; }
-function classStyle(id) {
-  const entry = projectPrefs.classes[String(id)];
-  return entry && entry.style ? { ...entry.style } : classDefault(id);
+function classStyle(name) {
+  const e = classEntry(name);
+  return e && e.style ? { ...e.style } : classDefault(name);
 }
-function className(id) {
-  const entry = projectPrefs.classes[String(id)];
-  return entry && entry.name ? entry.name : `class ${id}`;
+function className(name) { return name; }
+
+/** The classes in order: the project's list first - 1 to 9 pick from it -
+    then any class the annotation files use that the list does not have. */
+function classList() {
+  const defined = projectPrefs.classes.map((c) => c.name);
+  const extra = [...seenClasses].filter((n) => !defined.includes(n)).sort();
+  return [...defined, ...extra];
 }
-function classIds() {
-  return [...new Set([...seenClasses, ...Object.keys(projectPrefs.classes).map(Number)])]
-    .sort((a, b) => a - b);
+
+/** Keep the class new boxes get pointing at a class that exists: the one last
+    chosen in this project, else the first on the list. */
+function ensureActiveClass() {
+  const list = classList();
+  if (list.includes(activeClass)) return;
+  const stored = project ? localStorage.getItem(K_ACTIVE_CLASS(project)) : null;
+  activeClass = list.includes(stored) ? stored : (list[0] || DEFAULT_CLASS_NAME);
 }
 
 /** The style a box is drawn with, by where it came from and, for your own
@@ -2690,7 +2906,7 @@ function classIds() {
 function styleFor(kind, b) {
   if (kind === "pred") return styleOf("prediction");
   if (kind === "exem") return styleOf("exemplar");
-  return fromSam3(b) ? styleOf("approved") : classStyle(b.cls || 0);
+  return fromSam3(b) ? styleOf("approved") : classStyle(b.cls);
 }
 
 /** Dash pattern in screen px, scaled with the width so a thick dotted line
@@ -2838,7 +3054,7 @@ function renderLegend() {
     span.append(stylePreview("box", st, 18, 12), " " + text);
     frag.appendChild(span);
   };
-  for (const id of classIds()) item(classStyle(id), className(id));
+  for (const name of classList()) item(classStyle(name), name);
   item(styleOf("prediction"), "sam3");
   item(styleOf("approved"), "sam3 approved");
   item(styleOf("exemplar"), "exemplar");
@@ -2848,20 +3064,25 @@ function renderLegend() {
 // ---------------------------------------------------------------- project settings
 
 async function loadProjectSettings() {
-  projectPrefs = { version: 1, classes: {} };
-  seenClasses = new Set([0]);
+  projectPrefs = { version: 2, classes: [] };
+  seenClasses = new Set();
+  classCounts = null;
+  activeClass = "";
   try {
     const r = await fetch(q("api/project-settings"));
     if (!r.ok) throw new Error(`api/project-settings returned ${r.status}`);
     const data = await r.json();
-    projectPrefs = { version: data.version || 1, classes: data.classes || {} };
+    projectPrefs = { version: 2, classes: data.classes || [] };
     projectPrefsPath = data.path || "";
-    for (const id of data.seen || []) seenClasses.add(id);
+    for (const name of data.seen || []) seenClasses.add(name);
     if (data.warning) { console.warn(data.warning); keyStatus(data.warning, true); }
+    if (data.note) { console.info(data.note); status(data.note); }
   } catch (err) {
-    console.warn("class styles unavailable:", err.message);
+    console.warn("class list unavailable:", err.message);
   }
+  ensureActiveClass();
   applyAppearance();
+  renderClassChip();
 }
 
 let projectSaves = Promise.resolve();
@@ -2879,22 +3100,86 @@ function saveProjectSettings() {
       });
       if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
       projectPrefsPath = (await r.json()).path || projectPrefsPath;
-      keyStatus(`Class styles saved to ${projectPrefsPath}`);
+      keyStatus(`Classes saved to ${projectPrefsPath}`);
     } catch (err) {
-      keyStatus(`Class styles not saved (${err.message}). They work in this tab until you reload.`, true);
+      keyStatus(`Classes not saved (${err.message}). They work in this tab until you reload.`, true);
     }
   });
 }
 
-/** Keep a class entry only while it says something: a name, or a style that
-    differs from the palette default. */
-function setClass(id, patch) {
-  const key = String(id);
-  const entry = { ...(projectPrefs.classes[key] || {}), ...patch };
-  if (entry.style && sameStyle(entry.style, classDefault(id))) delete entry.style;
-  if (!entry.name) delete entry.name;
-  if (entry.style || entry.name) projectPrefs.classes[key] = entry;
-  else delete projectPrefs.classes[key];
+/** Put a class on the list if it is not there yet, and set or clear its
+    style - kept only while it differs from the palette default. */
+function setClass(name, patch) {
+  let e = classEntry(name);
+  if (!e) { e = { name }; projectPrefs.classes.push(e); }
+  if ("style" in patch) {
+    if (patch.style && !sameStyle(patch.style, classDefault(name))) e.style = patch.style;
+    else delete e.style;
+  }
+}
+
+async function loadClassCounts() {
+  if (!project || loadClassCounts.busy) return;
+  loadClassCounts.busy = true;
+  try {
+    const r = await fetch(q("api/classes/counts"));
+    if (r.ok) classCounts = (await r.json()).counts || {};
+  } catch (err) {
+    console.warn("class counts unavailable:", err.message);
+  }
+  loadClassCounts.busy = false;
+  renderKeys();
+}
+
+/** Rename a class in every annotation file (the server keeps a backup of the
+    folder first), or merge it into another one. The image on screen is saved
+    before, so its boxes are in the files that get rewritten. */
+async function renameClass(old, next, input) {
+  const undo = () => { if (input) input.value = old; };
+  if (next === old) return;
+  if (!validClassName(next)) {
+    keyStatus("A class name is one word - no spaces - of at most 64 characters.", true);
+    undo();
+    return;
+  }
+  const merge = classList().includes(next);
+  const n = classCounts ? classCounts[old] || 0 : null;
+  const boxesText = n === null ? "its boxes" : plural(n, "box", "boxes");
+  const ask = merge
+    ? `Merge \u201c${old}\u201d into \u201c${next}\u201d? ${n === null ? "All" : "All " + n} boxes of ${old} become ${next}, and ${old} leaves the list.`
+    : `Rename \u201c${old}\u201d to \u201c${next}\u201d in ${boxesText}?`;
+  if (!window.confirm(`${ask}\n\nThe annotation files are rewritten; a copy of the annotations folder is kept in backups/ first.`)) {
+    undo();
+    return;
+  }
+  if (!(await flush())) { undo(); return; }
+  try {
+    const r = await fetch(BASE + "api/classes/rename?" + new URLSearchParams({ project }), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old, new: next, merge }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const data = await r.json();
+    projectPrefs = { version: 2, classes: data.classes || [] };
+    seenClasses.delete(old);
+    if (data.boxes) seenClasses.add(next);
+    for (const b of boxes) if (b.cls === old) b.cls = next;
+    if (clipboard) for (const it of clipboard.items) if (it.cls === old) it.cls = next;
+    if (activeClass === old) { activeClass = next; localStorage.setItem(K_ACTIVE_CLASS(project), next); }
+    // Undo snapshots still hold the old name, and restoring one would write it
+    // back into a file: histories go, as on a run switch.
+    clearHistories();
+    classCounts = null;
+    keyStatus(`${merge ? "Merged" : "Renamed"}: ${plural(data.boxes, "box", "boxes")} in `
+      + `${plural(data.files, "file", "files")}. Backup: ${data.backup || "none needed"}`);
+  } catch (err) {
+    keyStatus(`Not renamed (${err.message}).`, true);
+    undo();
+  }
+  applyAppearance();
+  renderClassChip();
+  renderKeys();
 }
 
 function setPersonalStyle(key, st) {
@@ -3002,34 +3287,20 @@ function renderAppearance() {
   const frag = document.createDocumentFragment();
 
   const classes = h("section", "keys-screen");
-  classes.appendChild(h("h3", "", "Your boxes, by class"));
+  classes.appendChild(h("h3", "", "Classes"));
   if (!project) {
-    classes.appendChild(h("p", "keyhint", "Open a project to name and style its classes."));
+    classes.appendChild(h("p", "keyhint", "Open a project to set its classes."));
   } else {
+    if (classCounts === null) loadClassCounts();
     classes.appendChild(h("p", "keyhint",
-      `Saved with the project ${project}: class ids mean something different in each project. `
-      + "Every class its annotations use is listed."));
-    for (const id of classIds()) {
-      const name = h("input", "field classname");
-      name.type = "text";
-      name.maxLength = 64;
-      name.placeholder = `class ${id}`;
-      name.value = (projectPrefs.classes[String(id)] || {}).name || "";
-      name.dataset.f = `class${id}:name`;
-      name.setAttribute("aria-label", `Name of class ${id}`);
-      name.addEventListener("change", () => {
-        setClass(id, { name: name.value.trim() });
-        saveProjectSettings();
-      });
-      classes.appendChild(styleRow({
-        key: `class${id}`, kind: "box",
-        style: classStyle(id), defaults: classDefault(id),
-        head: [name, h("span", "classid", `id ${id}`)],
-        apply: (st) => { setClass(id, { style: st }); applyAppearance(); },
-        save: (st) => { setClass(id, { style: st }); saveProjectSettings(); },
-        reset: () => { setClass(id, { style: undefined }); saveProjectSettings(); },
-      }));
-    }
+      `The classes of ${project}, in order: 1 to 9 pick the first nine. A class's name is `
+      + "what the annotation files say, so renaming one rewrites every box of it (a copy of "
+      + "the annotations is kept in backups/ first). Names are one word. The style is for "
+      + "boxes you drew; sam3 boxes keep their own below."));
+    const list = classList();
+    const defined = projectPrefs.classes.length;
+    list.forEach((name, i) => classes.appendChild(classRow(name, i, i < defined, defined)));
+    classes.appendChild(addClassRow());
   }
   frag.appendChild(classes);
 
@@ -3063,11 +3334,91 @@ function renderAppearance() {
   el.keysList.replaceChildren(frag);
 }
 
+function classRow(name, i, defined, definedCount) {
+  const count = classCounts ? (classCounts[name] || 0) : null;
+  const input = h("input", "field classname");
+  input.type = "text";
+  input.maxLength = 64;
+  input.spellcheck = false;
+  input.value = name;
+  input.dataset.f = `class:${name}:name`;
+  input.setAttribute("aria-label", `Name of class ${name}`);
+  input.addEventListener("change", () => renameClass(name, input.value.trim(), input));
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); input.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); input.value = name; input.blur(); }
+  });
+  const head = [h("span", "classkey", i < 9 ? String(i + 1) : ""), input,
+                h("span", "classid", count === null ? "counting\u2026" : plural(count, "box", "boxes"))];
+  if (!defined) head.push(h("span", "tag", "in the files, not on the list"));
+  const small = (text, label, f, fn) => {
+    const b = h("button", "badge", text);
+    b.type = "button";
+    b.title = label;
+    b.setAttribute("aria-label", `${label}: ${name}`);
+    b.dataset.f = f;
+    b.addEventListener("click", fn);
+    head.push(b);
+  };
+  const move = (by) => {
+    const a = projectPrefs.classes, k = a.findIndex((c) => c.name === name);
+    [a[k], a[k + by]] = [a[k + by], a[k]];
+    saveProjectSettings();
+  };
+  if (defined && i > 0) small("\u2191", "Move up", `class:${name}:up`, () => move(-1));
+  if (defined && i < definedCount - 1) small("\u2193", "Move down", `class:${name}:down`, () => move(1));
+  if (count === 0) {
+    small("remove", "Remove from the list (no box uses it)", `class:${name}:remove`, () => {
+      projectPrefs.classes = projectPrefs.classes.filter((c) => c.name !== name);
+      seenClasses.delete(name);
+      ensureActiveClass();
+      renderClassChip();
+      saveProjectSettings();
+    });
+  }
+  return styleRow({
+    key: `class:${name}`, kind: "box",
+    style: classStyle(name), defaults: classDefault(name), head,
+    apply: (st) => { setClass(name, { style: st }); applyAppearance(); },
+    save: (st) => { setClass(name, { style: st }); saveProjectSettings(); },
+    reset: () => { setClass(name, { style: undefined }); saveProjectSettings(); },
+  });
+}
+
+function addClassRow() {
+  const row = h("div", "keyrow addclass");
+  const input = h("input", "field classname");
+  input.type = "text";
+  input.maxLength = 64;
+  input.spellcheck = false;
+  input.placeholder = "new class name";
+  input.dataset.f = "class:add:name";
+  input.setAttribute("aria-label", "Name of a new class");
+  const add = h("button", "badge", "add class");
+  add.type = "button";
+  add.dataset.f = "class:add";
+  const go = () => {
+    const name = input.value.trim();
+    if (!name) return;
+    if (!validClassName(name)) { keyStatus("A class name is one word - no spaces - of at most 64 characters.", true); return; }
+    if (classList().includes(name)) { keyStatus(`${name} is already a class.`, true); return; }
+    projectPrefs.classes.push({ name });
+    saveProjectSettings();
+    renderClassChip();
+    keyStatus(`Added ${name}: it is class ${projectPrefs.classes.length}.`);
+    focusKey("class:add:name");
+  };
+  add.addEventListener("click", go);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+  row.append(input, add);
+  return row;
+}
+
 /** Style changes on this tab, for the footer: personal styles, plus this
     project's class styles (names are not "changes from the defaults"). */
 function appearanceChangeCount() {
   return Object.keys(STYLE_DEFAULTS).filter((k) => prefs.styles[k]).length
-    + Object.values(projectPrefs.classes).filter((c) => c.style).length
+    + projectPrefs.classes.filter((c) => c.style).length
     + minimapChangeCount()
     + stripChangeCount();
 }
@@ -3315,7 +3666,7 @@ function drawMinimap() {
   for (const b of boxes) {
     g.beginPath();
     g.arc((b.x1 + b.x2) / 2 * sx, (b.y1 + b.y2) / 2 * sy, 2.6, 0, 2 * Math.PI);
-    g.fillStyle = classStyle(b.cls || 0).color;
+    g.fillStyle = classStyle(b.cls).color;
     g.fill();
     g.lineWidth = 1;
     g.strokeStyle = "rgba(8, 10, 12, 0.85)";
@@ -3728,7 +4079,8 @@ function scanTouch(kind = "annotate") {
 }
 
 function scanBlocked() {
-  return !!(draft || drag || panning || mmNav || mmDrag || el.keysDialog.open);
+  return !!(draft || drag || panning || mmNav || mmDrag || el.keysDialog.open
+            || commentPlacing || !el.cpop.hidden);
 }
 
 function beginGlide() {
@@ -4272,6 +4624,607 @@ function stripSection() {
 const stripChangeCount = () =>
   Object.keys(STRIP_DEFAULTS).filter((k) => prefs.strip[k] !== STRIP_DEFAULTS[k]).length;
 
+// ---------------------------------------------------------------- classes in the editor
+//
+// The class new boxes get is shown in the header. 1-9 pick from the project's
+// list; with one of your boxes selected, the same key also moves that box to
+// the class - one keystroke to fix a wrong label. The chip opens the list.
+
+function renderClassChip() {
+  ensureActiveClass();
+  el.classSwatch.style.background = classStyle(activeClass).color;
+  el.classChipName.textContent = activeClass;
+  const list = classList();
+  const k = list.indexOf(activeClass);
+  el.classChip.title = `Class for new boxes${k >= 0 && k < 9 ? ` (${k + 1})` : ""}: `
+    + "1 to 9 pick one, and move the selected box to it";
+}
+
+function chooseClass(name) {
+  activeClass = name;
+  if (project) localStorage.setItem(K_ACTIVE_CLASS(project), name);
+  seenClasses.add(name);
+  renderClassChip();
+  if (multi.length) { classMulti(name); return; }
+  if (sel && sel.kind === "box" && boxes[sel.i]) {
+    const b = boxes[sel.i];
+    if (b.cls !== name) {
+      const before = snapshot(), from = b.cls;
+      b.cls = name;
+      const ev = logEvent("box.class", { box: nb(b), from, to: name });
+      record(`class change to ${name}`, before, [ev]);
+      touch();
+      render();
+      renderLegend();
+      flash(`Box: ${from} \u2192 ${name}`);
+      return;
+    }
+  } else if (sel && sel.kind === "pred") {
+    flash(`New boxes: ${name}. A sam3 box gets its class once approved (enter)`);
+    return;
+  }
+  flash(`New boxes: ${name}`);
+}
+
+function pickClass(i) {
+  const list = classList();
+  if (i >= list.length) {
+    flash(`There is no class ${i + 1}: add classes in settings (k)`);
+    return;
+  }
+  chooseClass(list[i]);
+}
+
+function nextClass() {
+  const list = classList();
+  if (!list.length) return;
+  chooseClass(list[(list.indexOf(activeClass) + 1) % list.length]);
+}
+
+function renderClassMenu() {
+  const frag = document.createDocumentFragment();
+  classList().forEach((name, i) => {
+    const b = h("button", "classitem" + (name === activeClass ? " on" : ""));
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    const sw = h("i");
+    sw.style.background = classStyle(name).color;
+    b.append(h("span", "k", i < 9 ? String(i + 1) : ""), sw, h("span", "n", name));
+    b.title = "click: draw this class (and move the selection to it); ctrl click: select all its boxes";
+    b.addEventListener("click", (ev) => {
+      closeClassMenu();
+      if (ev.ctrlKey || ev.metaKey) selectClass(i);
+      else chooseClass(name);
+    });
+    frag.appendChild(b);
+  });
+  const edit = h("button", "classitem edit", "edit classes\u2026");
+  edit.type = "button";
+  edit.addEventListener("click", () => {
+    closeClassMenu();
+    settingsTab = "appearance";
+    localStorage.setItem(K_TAB, settingsTab);
+    toggleKeys();
+  });
+  frag.appendChild(edit);
+  el.classMenu.replaceChildren(frag);
+}
+
+function openClassMenu() {
+  renderClassMenu();
+  const r = el.classChip.getBoundingClientRect();
+  el.classMenu.style.left = `${Math.round(r.left)}px`;
+  el.classMenu.style.top = `${Math.round(r.bottom + 4)}px`;
+  el.classMenu.hidden = false;
+  el.classChip.setAttribute("aria-expanded", "true");
+}
+function closeClassMenu() {
+  el.classMenu.hidden = true;
+  el.classChip.setAttribute("aria-expanded", "false");
+}
+el.classChip.addEventListener("click", () => (el.classMenu.hidden ? openClassMenu() : closeClassMenu()));
+window.addEventListener("mousedown", (e) => {
+  if (!el.classMenu.hidden && !e.target.closest(".classmenu, #classChip")) closeClassMenu();
+}, true);
+el.classMenu.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeClassMenu(); el.classChip.focus(); }
+});
+
+// ---------------------------------------------------------------- copy and paste
+//
+// The clipboard keeps boxes in normalised coordinates with their class, so it
+// works across images of any size. A paste lands in the same place on the
+// image - the usual case, consecutive shots of one plot - or, with shift, at
+// the pointer. Pasted boxes are ordinary boxes of yours: pasting them is a
+// decision about this image.
+
+let clipboard = null;            // {from, items: [{cls, x1, y1, x2, y2}]}, normalised
+
+function copyBoxes() {
+  if (!natW) return;
+  const src = multi.length ? multi.filter((s) => s.kind === "box").map((s) => boxes[s.i]).filter(Boolean)
+    : sel && sel.kind === "box" && boxes[sel.i] ? [boxes[sel.i]] : boxes;
+  if (!src.length) { flash("Nothing to copy"); return; }
+  clipboard = {
+    from: project + "\u0000" + images[idx].name,
+    items: src.map((b) => ({ cls: b.cls, x1: b.x1 / natW, y1: b.y1 / natH, x2: b.x2 / natW, y2: b.y2 / natH })),
+  };
+  flash(`Copied ${plural(src.length, "box", "boxes")}`);
+}
+
+/** Keep a box of its size inside the image, sliding it back in at an edge. */
+function fitInImage(x1, y1, x2, y2) {
+  const w = Math.min(x2 - x1, natW), hh = Math.min(y2 - y1, natH);
+  const nx = clamp(x1, 0, natW - w), ny = clamp(y1, 0, natH - hh);
+  return { x1: nx, y1: ny, x2: nx + w, y2: ny + hh };
+}
+
+function pasteBoxes(atPointer) {
+  if (!natW) return;
+  if (!clipboard) { flash("Nothing copied yet: ctrl c copies"); return; }
+  const items = clipboard.items;
+  let dx = 0, dy = 0;                                   // normalised shift
+  if (atPointer) {
+    if (!lastClient) { flash("Point at the image first"); return; }
+    const p = toImage(lastClient);
+    const cx = (Math.min(...items.map((i) => i.x1)) + Math.max(...items.map((i) => i.x2))) / 2;
+    const cy = (Math.min(...items.map((i) => i.y1)) + Math.max(...items.map((i) => i.y2))) / 2;
+    dx = p.x / natW - cx;
+    dy = p.y / natH - cy;
+  } else if (clipboard.from === project + "\u0000" + images[idx].name) {
+    // Onto the image it came from: offset a little, or the copy hides exactly
+    // under its original and looks like nothing happened.
+    dx = 16 / scale() / natW;
+    dy = 16 / scale() / natH;
+  }
+  const before = snapshot();
+  const events = [];
+  for (const it of items) {
+    const box = fitInImage((it.x1 + dx) * natW, (it.y1 + dy) * natH, (it.x2 + dx) * natW, (it.y2 + dy) * natH);
+    boxes.push({ ...box, cls: it.cls, provenance: PROV_HUMAN, quality: "verified", score: 1.0 });
+    seenClasses.add(it.cls);
+    events.push(logEvent("box.paste", { box: nb(box), cls: it.cls }));
+  }
+  sel = items.length === 1 ? { kind: "box", i: boxes.length - 1 } : null;
+  record(`paste of ${plural(items.length, "box", "boxes")}`, before, events);
+  touch();
+  render();
+  flash(`Pasted ${plural(items.length, "box", "boxes")}`);
+}
+
+// ---------------------------------------------------------------- comments
+//
+// A note pinned to a point on the image. c, then a click where it goes; a
+// click on a pin opens it to read, edit, resolve or delete. Saved on the
+// server at once (<project>/comments/), with author and time - comments are
+// not part of undo, like messages rather than edits.
+
+let comments = [];               // the image's, from the server
+let commentPlacing = false;
+let openComment = null;          // the comment in the popup; {id: null} for a new one
+let pinFrame = 0;
+
+function startCommentPlacement() {
+  if (view !== "editor" || !natW) return;
+  draft = null;
+  closeCommentPopup();
+  commentPlacing = true;
+  el.viewport.classList.add("placing");
+  render();
+  flash("Click where the comment goes, esc cancels");
+}
+
+function cancelCommentPlacement() {
+  commentPlacing = false;
+  el.viewport.classList.remove("placing");
+}
+
+/** Called by pointerEditStart for a press while placing. */
+function placeComment(p) {
+  cancelCommentPlacement();
+  openCommentPopup({ id: null, x: clamp(p.x / natW, 0, 1), y: clamp(p.y / natH, 0, 1), text: "" });
+}
+
+function commentScreen(c) {
+  const s = scale();
+  return { x: panX + c.x * natW * s, y: panY + c.y * natH * s };
+}
+
+function schedulePins() {
+  if (!pinFrame) pinFrame = requestAnimationFrame(renderPins);
+}
+
+function renderPins() {
+  pinFrame = 0;
+  const show = view === "editor" && !!natW && !boxesHidden && !peeking;
+  const frag = document.createDocumentFragment();
+  if (show) {
+    comments.forEach((c, k) => {
+      const p = commentScreen(c);
+      const b = h("button", "pin" + (c.resolved ? " resolved" : "")
+        + (openComment && openComment.id === c.id ? " open" : ""), String(k + 1));
+      b.type = "button";
+      b.style.left = `${p.x}px`;
+      b.style.top = `${p.y}px`;
+      b.title = `${c.resolved ? "Resolved: " : ""}${c.text}`;
+      b.setAttribute("aria-label", `Comment ${k + 1}${c.resolved ? ", resolved" : ""}: ${c.text}`);
+      b.addEventListener("click", () => openCommentPopup(c));
+      frag.appendChild(b);
+    });
+  }
+  el.pins.replaceChildren(frag);
+  if (openComment) placePopup();
+}
+
+function placePopup() {
+  const p = commentScreen(openComment);
+  const W = el.viewport.clientWidth, H = el.viewport.clientHeight;
+  const pw = el.cpop.offsetWidth || 280, ph = el.cpop.offsetHeight || 150;
+  el.cpop.style.left = `${clamp(p.x + 16, 8, Math.max(8, W - pw - 8))}px`;
+  el.cpop.style.top = `${clamp(p.y + 8, 8, Math.max(8, H - ph - 8))}px`;
+}
+
+function openCommentPopup(c) {
+  openComment = c;
+  const isNew = !c.id;
+  el.cpopText.value = c.text || "";
+  el.cpopMeta.textContent = isNew ? "New comment"
+    : `${c.author || "someone"}, ${new Date(c.updated || c.created).toLocaleString()}`
+      + (c.resolved ? " \u2013 resolved" : "");
+  el.cpopResolve.hidden = isNew;
+  el.cpopDelete.hidden = isNew;
+  el.cpopResolve.textContent = c.resolved ? "reopen" : "resolve";
+  el.cpop.hidden = false;
+  placePopup();
+  schedulePins();
+  el.cpopText.focus();
+}
+
+function closeCommentPopup() {
+  openComment = null;
+  el.cpop.hidden = true;
+  schedulePins();
+}
+
+async function commentRequest(method, path, body) {
+  const r = await fetch(BASE + path + "?" + new URLSearchParams({ project }), {
+    method, headers: { "Content-Type": "application/json" },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  return r.json();
+}
+
+async function saveComment() {
+  const c = openComment;
+  if (!c) return;
+  const text = el.cpopText.value.trim();
+  if (!text) { if (!c.id) closeCommentPopup(); return; }
+  const name = encodeURIComponent(images[idx].name);
+  try {
+    if (!c.id) {
+      comments.push(await commentRequest("POST", `api/comments/${name}`, { x: c.x, y: c.y, text }));
+    } else if (text !== c.text) {
+      const upd = await commentRequest("PATCH", `api/comments/${name}/${c.id}`, { text });
+      comments = comments.map((x) => (x.id === upd.id ? upd : x));
+    }
+    closeCommentPopup();
+  } catch (err) {
+    flash(`Comment not saved: ${err.message}`);
+  }
+}
+
+el.cpopSave.addEventListener("click", saveComment);
+el.cpopClose.addEventListener("click", closeCommentPopup);
+el.cpopResolve.addEventListener("click", async () => {
+  const c = openComment;
+  if (!c || !c.id) return;
+  try {
+    const upd = await commentRequest("PATCH",
+      `api/comments/${encodeURIComponent(images[idx].name)}/${c.id}`, { resolved: !c.resolved });
+    comments = comments.map((x) => (x.id === upd.id ? upd : x));
+    closeCommentPopup();
+  } catch (err) {
+    flash(`Not changed: ${err.message}`);
+  }
+});
+el.cpopDelete.addEventListener("click", async () => {
+  const c = openComment;
+  if (!c || !c.id || !window.confirm("Delete this comment?")) return;
+  try {
+    await commentRequest("DELETE", `api/comments/${encodeURIComponent(images[idx].name)}/${c.id}`);
+    comments = comments.filter((x) => x.id !== c.id);
+    closeCommentPopup();
+  } catch (err) {
+    flash(`Not deleted: ${err.message}`);
+  }
+});
+el.cpopText.addEventListener("keydown", (e) => {
+  // Enter saves, shift enter is a new line, esc closes without saving.
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); saveComment(); }
+  if (e.key === "Escape") { e.preventDefault(); closeCommentPopup(); }
+});
+
+// ---------------------------------------------------------------- keyboard panning
+//
+// Arrow keys move the view while held, smoothly: frame by frame at
+// key_pan screen px per second, easing in over the first moments so a tap is
+// a small step, and 2.5 times as fast with shift. Two keys held pan
+// diagonally. An open box keeps following the pointer, as with the mouse.
+
+const keyPan = { held: new Set(), since: 0, last: 0, raf: 0 };
+let shiftHeld = false;
+window.addEventListener("keydown", (e) => { shiftHeld = e.shiftKey; }, true);
+window.addEventListener("keyup", (e) => { shiftHeld = e.shiftKey; }, true);
+
+function keyPanHold(dir, down) {
+  if (down) {
+    if (!keyPan.held.size) keyPan.since = performance.now();
+    keyPan.held.add(dir);
+    if (!keyPan.raf) { keyPan.last = 0; keyPan.raf = requestAnimationFrame(keyPanFrame); }
+  } else {
+    keyPan.held.delete(dir);
+  }
+}
+
+function keyPanFrame(t) {
+  keyPan.raf = 0;
+  if (!keyPan.held.size || view !== "editor" || !natW) return;
+  const dt = keyPan.last ? Math.min(t - keyPan.last, 50) : 0;
+  keyPan.last = t;
+  const vx = keyPan.held.has("right") - keyPan.held.has("left");
+  const vy = keyPan.held.has("down") - keyPan.held.has("up");
+  const len = Math.hypot(vx, vy);
+  if (len) {
+    const ease = 0.3 + 0.7 * Math.min(1, (t - keyPan.since) / 250);
+    const speed = prefs.pointer.key_pan * (shiftHeld ? 2.5 : 1) * ease;
+    // The view moves the way the arrow points, so the image moves the other.
+    panX -= (vx / len) * speed * dt / 1000;
+    panY -= (vy / len) * speed * dt / 1000;
+    applyTransform();
+    followPointer();
+  }
+  keyPan.raf = requestAnimationFrame(keyPanFrame);
+}
+
+function keyPanRow() {
+  const key = "key_pan";
+  const changed = prefs.pointer[key] !== POINTER_DEFAULTS[key];
+  const row = h("div", "keyrow speed" + (changed ? " changed" : ""));
+  const lab = h("label", "keylabel");
+  lab.htmlFor = "speed-key_pan";
+  lab.append("Arrow-key pan speed", h("span", "sub", "How fast the arrow keys move the view, on screen; shift makes it 2.5 times as fast."));
+  const wrap = h("span", "chips");
+  const r = h("input");
+  r.type = "range"; r.id = "speed-key_pan";
+  r.min = "100"; r.max = "4000"; r.step = "100";
+  r.value = String(prefs.pointer[key]);
+  r.dataset.f = "speed:key_pan";
+  const out = h("output", "speedval", `${prefs.pointer[key]} px/s`);
+  r.addEventListener("input", () => { prefs.pointer[key] = Number(r.value); out.textContent = `${r.value} px/s`; });
+  r.addEventListener("change", () => saveSettings());
+  wrap.append(r, out);
+  const actions = h("span", "keyactions");
+  if (changed) {
+    const reset = h("button", "badge", "reset");
+    reset.type = "button";
+    reset.dataset.f = "speedreset:key_pan";
+    reset.addEventListener("click", () => { prefs.pointer[key] = POINTER_DEFAULTS[key]; saveSettings(); });
+    actions.appendChild(reset);
+  }
+  row.append(lab, wrap, actions);
+  return row;
+}
+
+// ---------------------------------------------------------------- selecting several boxes
+//
+// `sel` is one box, with handles to move and resize it. `multi` is several at
+// once - chosen by dragging a rectangle (area select), by Ctrl+A, or by kind
+// or class - drawn with the selection wash but without handles. The two never
+// hold something at the same time; a single hit becomes `sel`.
+//
+// What acts on a selection acts on all of it: Delete removes your boxes,
+// rejects sam3 boxes and un-picks exemplars, as one undo step; 1-9 move your
+// boxes to a class; Enter approves sam3 boxes; Ctrl+C copies your boxes.
+
+let multi = [];               // [{kind, i}]
+let marquee = null;           // {x0, y0, x1, y1, button, add} in image px, while dragging
+let marqueeArmed = false;     // the next drag selects instead of drawing
+
+const inMulti = (kind, i) => multi.some((s) => s.kind === kind && s.i === i);
+
+/** Everything on the image that can be selected: what is drawn. An exemplar's
+    twin box is drawn as the exemplar, so it is the exemplar that counts. */
+function selectable() {
+  const out = [];
+  boxes.forEach((b, i) => { if (!twinOfExemplar(b)) out.push({ kind: "box", i, b }); });
+  preds.forEach((b, i) => { if (b.score >= threshold) out.push({ kind: "pred", i, b }); });
+  exems.forEach((b, i) => out.push({ kind: "exem", i, b }));
+  return out;
+}
+
+function describe(list) {
+  const n = (k) => list.filter((s) => s.kind === k).length;
+  const parts = [];
+  if (n("box")) parts.push(plural(n("box"), "of yours", "of yours"));
+  if (n("pred")) parts.push(`${n("pred")} sam3`);
+  if (n("exem")) parts.push(plural(n("exem"), "exemplar", "exemplars"));
+  return parts.join(", ");
+}
+
+/** Replace the selection: one box becomes the single selection (with its
+    handles), more become `multi`. */
+function setSelection(list, what) {
+  multi = [];
+  sel = null;
+  if (list.length === 1) sel = { kind: list[0].kind, i: list[0].i, picked: true };
+  else if (list.length > 1) multi = list.map(({ kind, i }) => ({ kind, i }));
+  render();
+  flash(list.length ? `Selected ${list.length}: ${describe(list)}` : `Nothing to select${what ? `: ${what}` : ""}`);
+}
+
+function currentSelection() {
+  return multi.length ? [...multi] : sel ? [{ kind: sel.kind, i: sel.i }] : [];
+}
+
+function selectWhere(test, what) {
+  if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
+  setSelection(selectable().filter(test), what);
+}
+
+const selectAll = () => selectWhere(() => true, "no boxes on this image");
+const selectExemplars = () => selectWhere((s) => s.kind === "exem", "no exemplars on this image");
+const selectPredictions = () => selectWhere((s) => s.kind === "pred", "no sam3 boxes shown");
+
+function selectClass(k) {
+  const name = classList()[k];
+  if (!name) { flash(`There is no class ${k + 1}`); return; }
+  selectWhere((s) => s.kind === "box" && s.b.cls === name, `no ${name} boxes`);
+}
+
+// ---------------------------------------------------------------- area select
+
+function toggleMarquee() {
+  if (view !== "editor" || !natW) return;
+  marqueeArmed = !marqueeArmed;
+  marquee = null;
+  if (marqueeArmed) draft = null;
+  el.viewport.classList.toggle("selecting", marqueeArmed);
+  el.areaBtn.classList.toggle("on", marqueeArmed);
+  el.areaBtn.setAttribute("aria-pressed", String(marqueeArmed));
+  flash(marqueeArmed ? "Drag over the boxes to select (shift adds), esc cancels" : "Area select off");
+  render();
+}
+
+function disarmMarquee() {
+  marqueeArmed = false;
+  marquee = null;
+  el.viewport.classList.remove("selecting");
+  el.areaBtn.classList.remove("on");
+  el.areaBtn.setAttribute("aria-pressed", "false");
+}
+
+/** Called by pointerEditStart for a press while area select is armed. */
+function startMarquee(e, p) {
+  marquee = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, button: e.button, add: false };
+  render();
+}
+
+window.addEventListener("mousemove", (e) => {
+  if (!marquee) return;
+  const p = toImage(e);
+  marquee.x1 = p.x;
+  marquee.y1 = p.y;
+  render();
+});
+
+window.addEventListener("mouseup", (e) => {
+  if (!marquee || e.button !== marquee.button) return;
+  const m = marquee;
+  const x1 = Math.min(m.x0, m.x1), x2 = Math.max(m.x0, m.x1);
+  const y1 = Math.min(m.y0, m.y1), y2 = Math.max(m.y0, m.y1);
+  disarmMarquee();
+  // Boxes that fall within the rectangle - wholly inside it, not merely
+  // touched by it, so a sweep across a dense patch takes only what it covers.
+  const hits = selectable().filter(({ b }) => b.x1 >= x1 && b.x2 <= x2 && b.y1 >= y1 && b.y2 <= y2);
+  const list = e.shiftKey ? currentSelection() : [];
+  for (const h of hits) if (!list.some((s) => s.kind === h.kind && s.i === h.i)) list.push(h);
+  setSelection(list, "no box lies wholly inside");
+});
+
+/** The rectangle, drawn with the boxes: a light blue that is no class's and
+    no source's colour, dashed while it is being dragged. */
+function renderMarquee() {
+  if (!marquee) return;
+  const r = rect({ x1: Math.min(marquee.x0, marquee.x1), y1: Math.min(marquee.y0, marquee.y1),
+                   x2: Math.max(marquee.x0, marquee.x1), y2: Math.max(marquee.y0, marquee.y1) }, "marquee");
+  el.svg.appendChild(r);
+}
+
+// ---------------------------------------------------------------- acting on a selection
+
+/** Delete everything selected: your boxes go, sam3 boxes are rejected (hidden
+    for this visit, and logged), exemplars are un-picked - their annotation
+    stays, as an ordinary box. One undo step brings it all back, un-picked
+    exemplars included. */
+async function deleteMulti() {
+  const before = snapshot();
+  const events = [];
+  const ops = [];
+  const exemIdx = multi.filter((s) => s.kind === "exem").map((s) => s.i).sort((a, b) => a - b);
+  const dropped = [];
+  for (const i of exemIdx) {
+    const e = exems[i];
+    if (!(await deleteExemplar(e.id))) break;          // the error is on screen
+    const box = { x1: e.x1, y1: e.y1, x2: e.x2, y2: e.y2, cls: e.cls };
+    ops.push({ kind: "drop", id: e.id, box });
+    events.push(logEvent("exemplar.drop", { id: e.id, box: nb(box) }));
+    dropped.push(i);
+  }
+  for (const i of dropped.sort((a, b) => b - a)) exems.splice(i, 1);
+  let changedBoxes = false;
+  for (const i of multi.filter((s) => s.kind === "pred").map((s) => s.i).sort((a, b) => b - a)) {
+    const p = preds[i];
+    events.push(logEvent("pred.reject", { box: nb(p), cls: p.cls, score: p.score, edited: !!p.edited }));
+    preds.splice(i, 1);
+  }
+  for (const i of multi.filter((s) => s.kind === "box").map((s) => s.i).sort((a, b) => b - a)) {
+    const b = boxes[i];
+    events.push(logEvent("box.delete", { box: nb(b), cls: b.cls, provenance: b.provenance, score: b.score }));
+    boxes.splice(i, 1);
+    changedBoxes = true;
+  }
+  const n = multi.length;
+  multi = [];
+  sel = null;
+  record(`deletion of ${n}`, before, events, ops.length ? { exemplars: ops } : {});
+  if (changedBoxes) touch();
+  render();
+  flash(`Deleted ${n}${dropped.length < exemIdx.length ? " (some exemplars could not be un-picked)" : ""}`);
+}
+
+function approveMulti() {
+  const idx = multi.filter((s) => s.kind === "pred").map((s) => s.i).sort((a, b) => b - a);
+  if (!idx.length) { flash("No sam3 box in the selection"); return; }
+  const before = snapshot();
+  const events = idx.map((i) => approve(i, true));
+  multi = [];
+  sel = null;
+  record(`approval of ${plural(events.length, "box", "boxes")}`, before, events);
+  touch();
+  render();
+  flash(`Approved ${events.length}`);
+}
+
+/** 1-9 with several selected: your boxes among them move to the class. */
+function classMulti(name) {
+  const own = multi.filter((s) => s.kind === "box").map((s) => boxes[s.i]).filter((b) => b && b.cls !== name);
+  if (!own.length) { flash(`New boxes: ${name}`); return; }
+  const before = snapshot();
+  const events = own.map((b) => {
+    const ev = logEvent("box.class", { box: nb(b), from: b.cls, to: name });
+    b.cls = name;
+    return ev;
+  });
+  record(`class change of ${plural(own.length, "box", "boxes")} to ${name}`, before, events);
+  touch();
+  render();
+  renderLegend();
+  flash(`${plural(own.length, "box", "boxes")} \u2192 ${name}`);
+}
+
+// Ctrl+A is "select every box" in the editor, and nothing anywhere else: it
+// never selects the page's text - the help, the settings dialog - only the
+// text of a field being typed in.
+window.addEventListener("keydown", (e) => {
+  if (!(e.ctrlKey || e.metaKey) || e.altKey || (e.key !== "a" && e.key !== "A")) return;
+  const t = e.target;
+  if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable) return;
+  e.preventDefault();
+}, true);
+
+el.areaBtn.addEventListener("click", () => toggleMarquee());
+
 // ---------------------------------------------------------------- small commands
 
 /** Zoom about a point in viewport pixels; the centre when none is given. */
@@ -4311,7 +5264,12 @@ function toggleMode() {
 }
 
 function escapeKey() {
+  if (!el.classMenu.hidden) { closeClassMenu(); return; }
+  if (commentPlacing) { cancelCommentPlacement(); flash("No comment placed"); return; }
+  if (openComment) { closeCommentPopup(); return; }
+  if (marqueeArmed || marquee) { disarmMarquee(); render(); flash("Area select off"); return; }
   if (draft) { draft = null; render(); flash("Box cancelled"); return; }
+  if (multi.length) { multi = []; render(); return; }
   if (sel) { sel = null; render(); return; }
   if (scan.on) { stopScan("Scanning stopped"); return; }
   backToGrid();

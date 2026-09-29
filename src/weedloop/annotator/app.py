@@ -20,10 +20,15 @@ the run dropdown can create a name (POST /api/run) and the directories appear
 on the first write.
 
 Annotation format (one file per image, in <project>/annotations/):
-    <class_id> <cx> <cy> <w> <h> <provenance> <quality> <score>
+    <class> <cx> <cy> <w> <h> <provenance> <quality> <score>
 
-Fields 1-5 are standard YOLO (normalised, class first). Fields 6-8 are the
-extra flags; `cut -d' ' -f1-5` gives you strict YOLO. Human boxes carry a
+The class is its NAME, as set in the UI - one word, no spaces - not a number
+that means something only through a mapping elsewhere. Fields 2-5 are YOLO
+geometry (normalised); fields 6-8 are the extra flags. Older files with
+numeric classes still read: "0" is simply a class named "0". Turning this into
+a standard format (numeric YOLO, COCO) is an export step, not the storage.
+Renaming a class rewrites every annotation file that uses it, after copying
+the annotations folder to <project>/backups/. Human boxes carry a
 score of 1.0 - they are not predictions, so there is nothing to be uncertain
 about, and a fixed 1.0 keeps every line the same shape.
 
@@ -70,8 +75,11 @@ and the OS user it runs as, so the log already has an actor column for when
 the tool stops being single-user. Undo does not delete an entry: it appends a
 history.undo line naming the entries it reverses.
 
-Class names and class box styles belong to one project, because class ids
-mean something different in each: they live in <project>/settings.json.
+The project's class list - names, their order (hotkeys 1-9 follow it) and
+how each is drawn - lives in <project>/settings.json.
+
+Comments (<project>/comments/<stem>.json): notes pinned to a point on an
+image, with author, time and a resolved flag.
 
 Personal settings - input bindings, pointer speeds, and the look of
 predictions, exemplars, the cursor and the crosshair - apply to every project
@@ -105,6 +113,7 @@ import re
 import shutil
 import socket
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -116,7 +125,8 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from importlib.resources import files
 
-from weedloop.config import IMAGE_SUFFIXES, Config, Project, Run, load_config
+from weedloop.config import (CLASS_NAME_MAX, IMAGE_SUFFIXES, Config, Project, Run,
+                             class_token, load_config, valid_class_name)
 
 # --------------------------------------------------------------------------
 # Format constants. Everything path-shaped now lives in ConfigSam3.
@@ -124,7 +134,6 @@ from weedloop.config import IMAGE_SUFFIXES, Config, Project, Run, load_config
 
 EXEMPLAR_SCHEMA = 1       # bump when the manifest layout changes incompatibly
 
-CLASS_ID = 0
 PROVENANCE = "human"
 QUALITY = "verified"
 HUMAN_SCORE = 1.0         # written on every human box; see the module docstring
@@ -156,6 +165,8 @@ EVENT_TYPES = frozenset({
     "box.draw", "box.edit", "box.delete",
     "pred.approve", "pred.adjust", "pred.reject",
     "exemplar.pick", "exemplar.drop",
+    "box.class", "box.paste",
+    "comment.add", "comment.edit", "comment.delete", "class.rename",
     "history.undo", "history.redo",
 })
 MAX_EVENT_DATA = 16_384            # bytes of JSON in one event's data
@@ -285,7 +296,10 @@ def prediction_path(run: Run, name: str) -> Path:
 # --------------------------------------------------------------------------
 
 
-MAX_CLASS_ID = 9999
+DEFAULT_CLASS = "0"        # what an old file without names calls its one class
+
+# What a class name may be, and how a stored class field reads, are shared with
+# the SAM 3 script through weedloop.config: valid_class_name(), class_token().
 
 
 class Box(BaseModel):
@@ -293,10 +307,18 @@ class Box(BaseModel):
     y1: float
     x2: float
     y2: float
-    cls: int = Field(default=CLASS_ID, ge=0, le=MAX_CLASS_ID)
+    cls: str = DEFAULT_CLASS
     provenance: str = PROVENANCE
     quality: str = QUALITY
     score: float = HUMAN_SCORE
+
+    @field_validator("cls")
+    @classmethod
+    def _class_name(cls, v: str) -> str:
+        if not valid_class_name(v):
+            raise ValueError(f"not a class name (one word, at most {CLASS_NAME_MAX} "
+                             f"characters): {v!r}")
+        return v
 
 
 class Annotation(BaseModel):
@@ -359,15 +381,11 @@ def read_boxes(
         except ValueError:
             print(f"  skipping {path.name}:{lineno} - non-numeric coordinates")
             continue
-        # The class id is kept, not assumed: a file from a multi-class dataset
-        # must come back out with the ids it went in with. "3.0" is accepted,
-        # since some exporters write class ids as floats.
-        try:
-            cls = int(float(parts[0]))
-        except ValueError:
-            cls = -1
-        if not 0 <= cls <= MAX_CLASS_ID:
-            print(f"  skipping {path.name}:{lineno} - bad class id {parts[0]!r}")
+        # The class is kept, not assumed: a file must come back out with the
+        # classes it went in with.
+        cls = class_token(parts[0])
+        if cls is None:
+            print(f"  skipping {path.name}:{lineno} - not a class name {parts[0]!r}")
             continue
         try:
             score = float(parts[7]) if len(parts) > 7 else HUMAN_SCORE
@@ -441,6 +459,10 @@ class ExemplarEntry(BaseModel):
     w: float
     h: float
     picked: str
+    # The class of the box that was picked. The SAM 3 script uses only the
+    # exemplars of the class its run predicts. None: picked before this was
+    # recorded.
+    cls: str | None = None
 
 
 class ExemplarSet(BaseModel):
@@ -454,14 +476,15 @@ class ExemplarSet(BaseModel):
     between projects by hand.
 
     `exemplars` is ordered by pick, so "the first n" is a stable, reproducible
-    subset of a longer set.
+    subset of a longer set. Each entry records its class; the set-level numeric
+    class_id of earlier versions is gone (old files still read: the field is
+    ignored, and dropped on the next write).
     """
 
     version: int = EXEMPLAR_SCHEMA
     name: str
     project: str = ""
     image_dir: str
-    class_id: int = CLASS_ID
     created: str
     updated: str
     exemplars: list[ExemplarEntry] = []
@@ -516,6 +539,7 @@ def exemplar_boxes(
             "y1": (e.cy - e.h / 2) * height,
             "x2": (e.cx + e.w / 2) * width,
             "y2": (e.cy + e.h / 2) * height,
+            "cls": e.cls,
         })
     return out
 
@@ -763,6 +787,7 @@ class PointerSettings(BaseModel):
     # "clicks": click to start a box, click again to finish it, no button held
     # in between. "drag": press, drag, release.
     draw: Literal["clicks", "drag"] = "clicks"
+    key_pan: float = Field(default=700, ge=100, le=4000)    # screen px/s, arrow keys
 
 
 class MinimapSettings(BaseModel):
@@ -900,35 +925,46 @@ class PersonalStyles(BaseModel):
     crosshair: CrosshairStyle | None = None
 
 
-class ClassEntry(BaseModel):
-    name: str | None = Field(default=None, max_length=64)   # None: shows as "class 3"
-    style: BoxStyle | None = None                            # None: the palette default
+PROJECT_SETTINGS_SCHEMA = 2
+
+
+class ClassDef(BaseModel):
+    name: str
+    style: BoxStyle | None = None        # None: the palette default
 
     @field_validator("name")
     @classmethod
-    def _printable(cls, v: str | None) -> str | None:
-        if v is None:
-            return None
-        if any(ord(ch) < 32 for ch in v):
-            raise ValueError("control characters in a class name")
-        return v.strip() or None
+    def _one_word(cls, v: str) -> str:
+        if not valid_class_name(v):
+            raise ValueError(f"class names are one word, at most {CLASS_NAME_MAX} "
+                             f"characters: {v!r}")
+        return v
 
 
 class ProjectSettings(BaseModel):
-    """What belongs to one project rather than to one person: class names and
-    how each class is drawn. Keys are class ids, as strings (JSON keys)."""
+    """What belongs to one project rather than to one person: its classes, in
+    order (hotkeys 1-9 follow the order), and how each is drawn."""
 
-    version: int = SETTINGS_SCHEMA
-    classes: dict[str, ClassEntry] = Field(default_factory=dict)
+    version: int = PROJECT_SETTINGS_SCHEMA
+    classes: list[ClassDef] = Field(default_factory=list)
+
+    @field_validator("version")
+    @classmethod
+    def _known_version(cls, v: int) -> int:
+        if v != PROJECT_SETTINGS_SCHEMA:
+            raise ValueError(f"project settings schema {v}; this version reads "
+                             f"{PROJECT_SETTINGS_SCHEMA}")
+        return v
 
     @field_validator("classes")
     @classmethod
-    def _class_ids(cls, classes: dict[str, ClassEntry]) -> dict[str, ClassEntry]:
+    def _unique(cls, classes: list[ClassDef]) -> list[ClassDef]:
         if len(classes) > 1000:
             raise ValueError("more than 1000 classes")
-        for key in classes:
-            if not key.isdigit() or int(key) > MAX_CLASS_ID or str(int(key)) != key:
-                raise ValueError(f"not a class id: {key!r}")
+        names = [c.name for c in classes]
+        dup = {n for n in names if names.count(n) > 1}
+        if dup:
+            raise ValueError(f"class names must be unique: {sorted(dup)}")
         return classes
 
 
@@ -952,35 +988,41 @@ def write_settings_file(path: Path, model: BaseModel, parse) -> None:
     tmp.replace(path)
 
 
-# Class ids that occur in a project's annotations, so the settings dialog can
-# list every class there is, not only those in images opened so far. One scan
+# Class names that occur in a project's annotations, so the class list can
+# show every class there is, not only those in images opened so far. One scan
 # per project and server run; every save adds its classes to the result.
-_seen_classes: dict[str, set[int]] = {}
+_seen_classes: dict[str, set[str]] = {}
 _seen_lock = threading.Lock()
 
+# Whole-project rewrites (a class renamed) and single saves must not
+# interleave, or a save could land between a file's read and its rewrite.
+_annotation_lock = threading.Lock()
 
-def seen_classes(project: Project) -> set[int]:
+
+def class_counts(project: Project) -> dict[str, int]:
+    """Boxes per class name over all annotation files. A full scan."""
+    counts: dict[str, int] = {}
+    if project.annotations_dir.is_dir():
+        for f in project.annotations_dir.glob("*.txt"):
+            try:
+                text = f.read_text()
+            except OSError:
+                continue
+            for line in text.splitlines():
+                head = line.split(maxsplit=1)
+                if len(head) < 2:
+                    continue
+                name = class_token(head[0])
+                if name is not None:
+                    counts[name] = counts.get(name, 0) + 1
+    return counts
+
+
+def seen_classes(project: Project) -> set[str]:
     key = str(project.annotations_dir)
     with _seen_lock:
         if key not in _seen_classes:
-            ids: set[int] = set()
-            if project.annotations_dir.is_dir():
-                for f in project.annotations_dir.glob("*.txt"):
-                    try:
-                        text = f.read_text()
-                    except OSError:
-                        continue
-                    for line in text.splitlines():
-                        head = line.split(maxsplit=1)
-                        if not head:
-                            continue
-                        try:
-                            cls = int(float(head[0]))
-                        except ValueError:
-                            continue
-                        if 0 <= cls <= MAX_CLASS_ID:
-                            ids.add(cls)
-            _seen_classes[key] = ids
+            _seen_classes[key] = set(class_counts(project))
         return set(_seen_classes[key])
 
 
@@ -989,6 +1031,78 @@ def note_classes(project: Project, boxes: list[Box]) -> None:
         known = _seen_classes.get(str(project.annotations_dir))
         if known is not None:
             known.update(b.cls for b in boxes)
+
+
+def backup_annotations(project: Project, reason: str) -> Path | None:
+    """Copy the whole annotations folder aside before a rewrite that touches
+    many files. They are small text files; the hand work in them is not."""
+    src = project.annotations_dir
+    if not src.is_dir():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    dst = project.annotations_dir.parent / "backups" / f"annotations-{stamp}-{reason}"
+    shutil.copytree(src, dst)
+    return dst
+
+
+def rename_classes_in_files(project: Project, mapping: dict[str, str]) -> tuple[int, int]:
+    """Rewrite the class field of every annotation line whose class is a key
+    of `mapping`. Only that field changes; the rest of each line is kept
+    byte for byte. Returns (files changed, lines changed)."""
+    files = lines = 0
+    if not project.annotations_dir.is_dir():
+        return 0, 0
+    for f in sorted(project.annotations_dir.glob("*.txt")):
+        try:
+            text = f.read_text()
+        except OSError:
+            continue
+        out, changed = [], 0
+        for line in text.splitlines():
+            head = line.split(maxsplit=1)
+            name = class_token(head[0]) if head else None
+            if name in mapping and len(head) == 2:
+                out.append(f"{mapping[name]} {head[1]}")
+                changed += 1
+            else:
+                out.append(line)
+        if changed:
+            tmp = f.with_name(f".{f.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+            tmp.write_text("\n".join(out) + ("\n" if text.endswith("\n") else ""))
+            tmp.replace(f)
+            files += 1
+            lines += changed
+    return files, lines
+
+
+def migrate_project_settings_v1(project: Project, data: dict) -> tuple[ProjectSettings, int]:
+    """v1 kept a display name per numeric class id; since v2 the annotation
+    files carry the name itself. Ids that had a name are renamed in every
+    annotation file (after a backup); ids without one keep their number as
+    their name. Spaces in old names become underscores - a name is one word."""
+    classes: list[ClassDef] = []
+    mapping: dict[str, str] = {}
+    for key in sorted(data.get("classes") or {}, key=lambda k: (not k.isdigit(), k.zfill(8))):
+        entry = (data["classes"].get(key) or {})
+        name = re.sub(r"\s+", "_", (entry.get("name") or "").strip()) or key
+        if not valid_class_name(name) or name in [c.name for c in classes]:
+            name = key
+        style = entry.get("style")
+        try:
+            style = BoxStyle.model_validate(style) if style else None
+        except ValueError:
+            style = None
+        classes.append(ClassDef(name=name, style=style))
+        if name != key:
+            mapping[key] = name
+    files = 0
+    if mapping:
+        with _annotation_lock:
+            backup_annotations(project, "before-class-names")
+            files, _ = rename_classes_in_files(project, mapping)
+        with _seen_lock:
+            _seen_classes.pop(str(project.annotations_dir), None)
+    return ProjectSettings(classes=classes), files
 
 
 # PersonalSettings names PersonalStyles before it is defined; resolve it now
@@ -1284,6 +1398,7 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "complete": read_flag(project, name),
         "active_ms": event_log(project).active_ms(name),
         "coverage": read_coverage(project, name),
+        "comments": read_comments(project, name),
     }
 
 
@@ -1292,7 +1407,8 @@ def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> di
     """No run parameter: annotations and flags are project-scoped, and a run
     must never be able to influence where hand labels land."""
     image_path(project, name)  # validates the name
-    write_annotation(project, name, annotation.boxes)
+    with _annotation_lock:
+        write_annotation(project, name, annotation.boxes)
     write_flag(project, name, annotation.complete)
     note_classes(project, annotation.boxes)
     return {"saved": len(annotation.boxes)}
@@ -1384,21 +1500,30 @@ def put_settings(settings: PersonalSettings) -> dict:
 
 @app.get("/api/project-settings")
 def get_project_settings(project: ProjectDep) -> dict:
-    """Class names and styles for this project, plus every class id its
-    annotations use. An unreadable file is reported, not fatal."""
+    """The class list and styles, plus every class name the annotations use.
+    A version-1 file is migrated on the way (see migrate_project_settings_v1).
+    An unreadable file is reported, not fatal."""
     path = project_settings_path(project)
-    warning = None
+    warning = note = None
     ps = ProjectSettings()
     if path.is_file():
         try:
-            ps = ProjectSettings.model_validate_json(path.read_text(encoding="utf-8"))
+            raw = json.loads(path.read_text(encoding="utf-8"))
+            if raw.get("version", 1) == 1:
+                with _settings_lock:
+                    ps, files = migrate_project_settings_v1(project, raw)
+                    write_settings_file(path, ps, lambda _t: None)
+                note = ("Class names are now written into the annotation files themselves"
+                        + (f" ({files} files updated; the old ones are in backups/)." if files else "."))
+            else:
+                ps = ProjectSettings.model_validate(raw)
         except (ValueError, OSError) as exc:
             first = str(exc).splitlines()[0]
             warning = (f"{display_path(path)} could not be read ({first}); using the "
-                       f"default class styles. The file is kept aside on your next change.")
+                       f"default class list. The file is kept aside on your next change.")
     return {**ps.model_dump(exclude_none=True),
-            "seen": sorted(seen_classes(project) | {CLASS_ID}),
-            "path": display_path(path), "warning": warning}
+            "seen": sorted(seen_classes(project)),
+            "path": display_path(path), "warning": warning, "note": note}
 
 
 @app.put("/api/project-settings")
@@ -1407,6 +1532,163 @@ def put_project_settings(project: ProjectDep, ps: ProjectSettings) -> dict:
     with _settings_lock:
         write_settings_file(path, ps, ProjectSettings.model_validate_json)
     return {"saved": True, "path": display_path(path)}
+
+
+@app.get("/api/classes/counts")
+def get_class_counts(project: ProjectDep) -> dict:
+    """Boxes per class, from a scan of every annotation file."""
+    return {"counts": class_counts(project)}
+
+
+class ClassRename(BaseModel):
+    old: str
+    new: str
+    merge: bool = False                  # the new name is taken: join the two
+
+    @field_validator("old", "new")
+    @classmethod
+    def _one_word(cls, v: str) -> str:
+        if not valid_class_name(v):
+            raise ValueError(f"class names are one word, at most {CLASS_NAME_MAX} "
+                             f"characters: {v!r}")
+        return v
+
+
+@app.post("/api/classes/rename")
+def rename_class(project: ProjectDep, req: ClassRename) -> dict:
+    """Rename a class everywhere it is used: every annotation file (after a
+    backup of the folder) and the class list. Renaming onto a name that is
+    already a class merges the two, and only when asked to."""
+    if req.old == req.new:
+        return {"files": 0, "boxes": 0}
+    path = project_settings_path(project)
+    with _settings_lock:
+        ps = ProjectSettings()
+        if path.is_file():
+            ps = ProjectSettings.model_validate_json(path.read_text(encoding="utf-8"))
+        names = {c.name for c in ps.classes} | seen_classes(project)
+        if req.new in names and not req.merge:
+            raise HTTPException(409, f"{req.new!r} is already a class; merging needs merge=true")
+        with _annotation_lock:
+            backup = backup_annotations(project, f"rename-{req.old}")
+            files, boxes = rename_classes_in_files(project, {req.old: req.new})
+        old = next((c for c in ps.classes if c.name == req.old), None)
+        target = next((c for c in ps.classes if c.name == req.new), None)
+        if old is not None and target is None:
+            old.name = req.new                     # keeps its place and style
+        elif old is not None:
+            ps.classes.remove(old)                 # merged: the target's style wins
+        elif target is None:
+            ps.classes.append(ClassDef(name=req.new))
+        write_settings_file(path, ps, ProjectSettings.model_validate_json)
+    with _seen_lock:
+        _seen_classes.pop(str(project.annotations_dir), None)
+    log_server_event(project, "class.rename", None,
+                     {"from": req.old, "to": req.new, "merge": req.merge,
+                      "files": files, "boxes": boxes})
+    return {"files": files, "boxes": boxes,
+            "backup": display_path(backup) if backup else None,
+            **ps.model_dump(exclude_none=True)}
+
+
+# --------------------------------------------------------------------------
+# Comments. See the module docstring.
+# --------------------------------------------------------------------------
+
+class CommentIn(BaseModel):
+    x: float = Field(ge=0, le=1)         # normalised position on the image
+    y: float = Field(ge=0, le=1)
+    text: str = Field(min_length=1, max_length=4000)
+
+
+class CommentPatch(BaseModel):
+    text: str | None = Field(default=None, min_length=1, max_length=4000)
+    resolved: bool | None = None
+
+
+_comments_lock = threading.Lock()
+
+
+def comments_path(project: Project, name: str) -> Path:
+    return project.annotations_dir.parent / "comments" / (Path(name).stem + ".json")
+
+
+def read_comments(project: Project, name: str) -> list[dict]:
+    path = comments_path(project, name)
+    if not path.is_file():
+        return []
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return [c for c in data.get("comments", []) if isinstance(c, dict) and "id" in c]
+    except (ValueError, OSError) as exc:
+        print(f"  ignoring {path.name}: {exc}")
+        return []
+
+
+def write_comments(project: Project, name: str, comments: list[dict]) -> None:
+    path = comments_path(project, name)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps({"image": name, "comments": comments}, indent=1,
+                              ensure_ascii=False), encoding="utf-8")
+    tmp.replace(path)
+
+
+def log_server_event(project: Project, type_: str, image: str | None, data: dict) -> None:
+    """An event the server itself originates, in the same shape as the
+    browser's, so the log reads as one stream."""
+    event_log(project).append([{
+        "t": now(), "actor": ACTOR, "project": project.name,
+        "id": uuid.uuid4().hex, "type": type_,
+        "ct": int(datetime.now(timezone.utc).timestamp() * 1000),
+        "session": "server", "image": image, "run": None, "data": data,
+    }])
+
+
+@app.post("/api/comments/{name}")
+def add_comment(project: ProjectDep, name: str, c: CommentIn) -> dict:
+    image_path(project, name)
+    item = {"id": uuid.uuid4().hex[:12], "x": c.x, "y": c.y, "text": c.text,
+            "author": ACTOR, "created": now(), "updated": None, "resolved": False}
+    with _comments_lock:
+        comments = read_comments(project, name)
+        comments.append(item)
+        write_comments(project, name, comments)
+    log_server_event(project, "comment.add", name, {"id": item["id"], "x": c.x, "y": c.y,
+                                                    "text": c.text})
+    return item
+
+
+@app.patch("/api/comments/{name}/{cid}")
+def edit_comment(project: ProjectDep, name: str, cid: str, patch: CommentPatch) -> dict:
+    image_path(project, name)
+    with _comments_lock:
+        comments = read_comments(project, name)
+        item = next((c for c in comments if c["id"] == cid), None)
+        if item is None:
+            raise HTTPException(404, f"no comment {cid} on {name}")
+        if patch.text is not None:
+            item["text"] = patch.text
+        if patch.resolved is not None:
+            item["resolved"] = patch.resolved
+        item["updated"] = now()
+        write_comments(project, name, comments)
+    log_server_event(project, "comment.edit", name,
+                     {"id": cid, **patch.model_dump(exclude_none=True)})
+    return item
+
+
+@app.delete("/api/comments/{name}/{cid}")
+def delete_comment(project: ProjectDep, name: str, cid: str) -> dict:
+    image_path(project, name)
+    with _comments_lock:
+        comments = read_comments(project, name)
+        kept = [c for c in comments if c["id"] != cid]
+        if len(kept) == len(comments):
+            raise HTTPException(404, f"no comment {cid} on {name}")
+        write_comments(project, name, kept)
+    log_server_event(project, "comment.delete", name, {"id": cid})
+    return {"deleted": cid}
 
 
 @app.get("/api/exemplars")
@@ -1456,6 +1738,7 @@ def add_exemplar(project: ProjectDep, run: RunDep, name: str, box: Box) -> dict:
         w=(x2 - x1) / width,
         h=(y2 - y1) / height,
         picked=now(),
+        cls=box.cls,
     )
     s.exemplars.append(entry)
     s.updated = entry.picked

@@ -28,6 +28,21 @@ on its next run. Everything else is derived:
             exemplars/<run>.json       the manifest that prompted this run
             run_manifest.json
 
+The annotator keeps more project-scoped files next to annotations/ - its
+class list and styles (settings.json), comments/, coverage/, events/ (the
+append-only log), backups/ (annotations copied aside before a class rename)
+and .thumbs/. None of them is read by the SAM 3 script except settings.json,
+whose class list it checks inference.class_name against.
+
+--- Classes -------------------------------------------------------------------
+A class is a NAME, the first field of every annotation and prediction line:
+    <class> <cx> <cy> <w> <h> <provenance> <quality> <score>
+There is no numeric id with a mapping kept elsewhere. A name is one word
+(no whitespace), because the line is split on whitespace. Older files with
+numeric classes still read - "0" is a class called "0" - and some exporters
+write "2.0" for 2, which reads as "2". Both programs use valid_class_name()
+and class_token() below, so they cannot disagree about what a class is.
+
 Annotations and flags sit above `runs/` on purpose: they are facts about the
 dataset, not about one SAM 3 configuration, and putting them under a run name
 would orphan hours of irreplaceable work the moment a run is renamed.
@@ -40,14 +55,38 @@ that produced them.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp"}
+
+CLASS_NAME_MAX = 64
+
+
+def valid_class_name(name: str) -> bool:
+    """One word: it is the first field of a whitespace-separated line."""
+    return (0 < len(name) <= CLASS_NAME_MAX
+            and not any(ch.isspace() or ord(ch) < 32 for ch in name))
+
+
+def class_token(raw: str) -> str | None:
+    """The class of an annotation or prediction line, as stored. Integer ids
+    that some exporters write as floats ("2.0") read as "2", so an old numeric
+    file does not split one class into two. None if it cannot be a class."""
+    tok = raw.strip()
+    if "." in tok:
+        try:
+            f = float(tok)
+            if f.is_integer():
+                tok = str(int(f))
+        except ValueError:
+            pass
+    return tok if valid_class_name(tok) else None
 
 
 def _expand(p: Path) -> Path:
@@ -185,6 +224,24 @@ class Project:
     def runs_dir(self) -> Path:
         return self.dir / "runs"
 
+    @property
+    def settings_path(self) -> Path:
+        """The annotator's project settings: the class list, in order."""
+        return self.dir / "settings.json"
+
+    def class_names(self) -> list[str] | None:
+        """The project's class list as the annotator keeps it, or None when
+        there is no list to check against: no file yet, a file the annotator
+        has not migrated to class names (version 1 - opening the project in
+        the annotator once does that), or one that cannot be read."""
+        try:
+            data = json.loads(self.settings_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return None
+        if data.get("version") != 2 or not isinstance(data.get("classes"), list):
+            return None
+        return [c["name"] for c in data["classes"] if isinstance(c, dict) and "name" in c]
+
     # -- runs ---------------------------------------------------------------
 
     def run(self, name: str) -> Run:
@@ -313,16 +370,55 @@ class StripCfg(Base):
 
 class InferenceCfg(Base):
     text_prompt: str | None = None
-    class_id: int | None = 0
+    # The class every prediction line of this run is written as - a name from
+    # the project's class list, so that approving a prediction in the
+    # annotator keeps it. Required by the SAM 3 script, ignored by the
+    # annotator, hence optional here: the annotator validates this file too.
+    class_name: str | None = None
     conf_threshold: float = Field(0.1, ge=0.0, le=1.0)
     max_edge: int = Field(2048, ge=1)
     fast_prompt_append: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_class_id(cls, data: Any) -> Any:
+        # class_id did two jobs and is split in two; say so rather than let
+        # extra="forbid" report a bare "extra input".
+        if isinstance(data, dict) and "class_id" in data:
+            raise ValueError(
+                "inference.class_id is gone: classes are names now. Set "
+                "inference.class_name to the class the predictions belong to "
+                "(e.g. rumex), and dataset.gt_class to filter the gt/ labels "
+                "(null = every class)")
+        return data
+
+    @field_validator("class_name", mode="after")
+    @classmethod
+    def _one_word(cls, v: str | None) -> str | None:
+        if v is not None and not valid_class_name(v):
+            raise ValueError(f"a class name is one word, at most {CLASS_NAME_MAX} "
+                             f"characters: {v!r}")
+        return v
 
 
 class DatasetCfg(Base):
     num_images: int | None = None
     image_seed: int = 0
     image_exts: tuple[str, ...] = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp")
+    # Which class of the shipped gt/ labels counts, compared as a class token:
+    # 0, "0" and "0.0" are the same class, and a named one works too.
+    # null = every class.
+    gt_class: str | None = None
+
+    @field_validator("gt_class", mode="before")
+    @classmethod
+    def _as_token(cls, v: Any) -> str | None:
+        if v is None:
+            return None
+        tok = class_token(str(v))
+        if tok is None:
+            raise ValueError(f"not a class: {v!r}")
+        return tok
 
 
 class PredictionCfg(Base):

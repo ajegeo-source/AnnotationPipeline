@@ -72,9 +72,13 @@ Outputs
     <OUTPUT_DIR>/run_manifest.json
 
 Prediction line format (8 fields, space separated):
-    <class_id> <cx> <cy> <w> <h> <provenance> <quality> <score>
-Fields 1-5 are strict YOLO, so `cut -d' ' -f1-5` yields a file any YOLO
-trainer will accept. Fields 6-8 are the extra flags the annotation tool reads.
+    <class> <cx> <cy> <w> <h> <provenance> <quality> <score>
+The class is a NAME - inference.class_name - exactly as in the annotation
+files, not a number that needs a mapping to mean anything. It should be a
+class on the project's list in the annotator, so that approving a prediction
+keeps its class; the run warns when it is not. Fields 2-5 are YOLO geometry,
+normalised; fields 6-8 are the extra flags the annotation tool reads.
+Converting to a standard format (numeric YOLO, COCO) is an export step.
 
 Launch (interactive, Gamarello):
     unset SLURM_MEM_PER_CPU
@@ -88,7 +92,7 @@ Launch (interactive, Gamarello):
 """
 
 import argparse
-from weedloop.config import load_config
+from weedloop.config import class_token, load_config
 
 import json
 import math
@@ -144,16 +148,24 @@ def build_model_and_processor(cfg):
 # ------------------------------ dataset -------------------------------------
 
 def read_yolo_boxes(txt_path: Path, cfg):
+    """Normalised cxcywh boxes of one gt/ file, of the class dataset.gt_class
+    (every class when that is null). Classes are compared as class tokens, so
+    a numeric file (0, 0.0) and a named one (rumex) both work."""
     boxes = []
     if not txt_path.exists():
         return boxes
+    want = cfg.dataset.gt_class
     for line in txt_path.read_text().splitlines():
         parts = line.split()
         if len(parts) < 5:
             continue
-        if cfg.inference.class_id is not None and int(float(parts[0])) != cfg.inference.class_id:
+        cls = class_token(parts[0])
+        if cls is None or (want is not None and cls != want):
             continue
-        boxes.append(tuple(float(v) for v in parts[1:5]))
+        try:
+            boxes.append(tuple(float(v) for v in parts[1:5]))
+        except ValueError:
+            continue
     return boxes
 
 
@@ -223,6 +235,24 @@ def select_from_manifest(cfg, run, image_dir: Path):
     entries = data.get("exemplars", [])
     if not entries:
         raise SystemExit(f"{path.name} contains no exemplars")
+
+    # A run prompts one class. Exemplars record the class they were picked as;
+    # the others are not this run's, and "the first n" means the first n of
+    # this class. Entries picked before classes were recorded carry none and
+    # are kept, as before.
+    want = cfg.inference.class_name
+    others = [e for e in entries if e.get("cls") not in (None, want)]
+    entries = [e for e in entries if e.get("cls") in (None, want)]
+    if others:
+        print(f"[note] {len(others)} exemplar(s) in {path.name} are of other classes "
+              f"({', '.join(sorted({e['cls'] for e in others}))}) and are not used "
+              f"for {want}")
+    if not entries:
+        raise SystemExit(f"{path.name} has no exemplars of class {want!r}")
+    unlabelled = sum(1 for e in entries if e.get("cls") is None)
+    if unlabelled:
+        print(f"[note] {unlabelled} exemplar(s) in {path.name} were picked before "
+              f"exemplars recorded their class; they are used as {want}")
     if len(entries) < cfg.exemplars.n:
         print(f"[warn] manifest holds {len(entries)} boxes, n={cfg.exemplars.n}; "
               f"using all of them")
@@ -456,7 +486,7 @@ def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg):
         if x2 - x1 < 1.0 or y2 - y1 < 1.0:
             continue
         lines.append(
-            f"{cfg.inference.class_id if cfg.inference.class_id is not None else 0} "
+            f"{cfg.inference.class_name} "
             f"{((x1 + x2) / 2) / w0:.6f} {((y1 + y2) / 2) / h0:.6f} "
             f"{(x2 - x1) / w0:.6f} {(y2 - y1) / h0:.6f} "
             f"{cfg.predictions.provenance} {cfg.predictions.quality} {float(score):.4f}"
@@ -530,6 +560,24 @@ def main(cfg):
     # raise with the offending path rather than producing an empty listing.
     project = cfg.project()                # FileNotFoundError names the path
     run = cfg.active_run(project)
+
+    # Every prediction line is written as this class, so it has to be set - and
+    # should be on the project's list, or an approved prediction would not keep
+    # it (the annotator gives it the class being drawn with instead).
+    class_name = cfg.inference.class_name
+    if not class_name:
+        raise SystemExit("inference.class_name is not set: it is the class every "
+                         "prediction of this run is written as (e.g. rumex)")
+    known = project.class_names()
+    if known is None:
+        print(f"[note] {project.name} has no class list yet (or the annotator has "
+              f"not opened it since classes became names); {class_name!r} is not "
+              f"checked against one")
+    elif class_name not in known:
+        print(f"[warn] {class_name!r} is not on {project.name}'s class list "
+              f"({', '.join(known) or 'empty'}). Predictions are written as it "
+              f"anyway, but approving one in the annotator will give it the class "
+              f"being drawn with. Add it in the annotator, or fix inference.class_name.")
     run.mkdirs()
 
     image_dir = project.image_dir
@@ -546,6 +594,8 @@ def main(cfg):
 
     print(f"project     =  {project.name}  ({project.dir})")
     print(f"run         =  {run.name}  ({run.dir})")
+    print(f"class       =  {class_name}"
+          + (f"   (gt/ labels of class {cfg.dataset.gt_class})" if cfg.dataset.gt_class else ""))
 
     pairs = collect_pairs(image_dir, anno_dir, cfg)
     n_boxes = sum(len(b) for _, b in pairs)
@@ -671,6 +721,8 @@ def main(cfg):
             "exemplars": [{"source": t.source, "box_cxcywh_norm": list(t.box),
                            "tile_px": list(t.size)} for t in tiles],
             "text_prompt": cfg.inference.text_prompt,
+            "class_name": class_name,
+            "gt_class": cfg.dataset.gt_class,
             "strip_side": cfg.strip.side,
             "tile_max_edge": cfg.exemplars.tile_max_edge,
             "exemplar_scale_matched": True,
@@ -684,8 +736,9 @@ def main(cfg):
             "image_dir": str(image_dir),
             "anno_dir": str(anno_dir) if anno_dir else None,
             "predictions_dir": str(pred_dir),
-            "prediction_format": ("class_id cx cy w h provenance quality score; "
-                                  "cxcywh normalised against the ORIGINAL image size"),
+            "prediction_format": ("class cx cy w h provenance quality score; class is "
+                                  "a name (class_name); cxcywh normalised against the "
+                                  "ORIGINAL image size"),
             "prediction_provenance": cfg.predictions.provenance,
             "prediction_quality": cfg.predictions.quality,
             "images_processed": n_done,
