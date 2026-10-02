@@ -17,7 +17,7 @@ annotator:
   host: 0.0.0.0
   port: 8000
 run:
-  name: Repro_test     # the run subdirectory under <project>/runs/
+  name: BirdTester     # the run subdirectory under <project>/runs/
   overwrite: true
 exemplars:
   source: manifest              # "random_gt" needs a gt/ folder in the project
@@ -31,7 +31,7 @@ strip:
   fill: [114, 114, 114]       # neutral grey for unused strip area
 inference:
   text_prompt: "crow"           # e.g. "rumex" to combine text + exemplars
-  class_name: crow            # every prediction is written as this class; one
+  class_name: Rumex            # every prediction is written as this class; one
                               # word, and a class on the project's list in the
                               # annotator, so approving a prediction keeps it.
                               # A manifest run uses only exemplars of this class.

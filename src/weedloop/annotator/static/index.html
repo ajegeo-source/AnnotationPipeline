@@ -500,6 +500,17 @@
   .stats .d b { color: var(--done); font-weight: 500; }
   .stats .p b { color: var(--started); font-weight: 500; }
   .stats .t b { color: var(--text); font-weight: 500; }
+  .stats b { font-weight: 500; }
+  /* A stage in the Workflow tab: number, colour, name, done, count - one line. */
+  .keyrow.stagerow { grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; }
+  .stagerow .chips { display: flex; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 12px; }
+  .stagerow input[type="color"] {
+    width: 34px; height: 24px; padding: 1px 2px; border: 1px solid var(--line); border-radius: 2px;
+    background: var(--bg); cursor: pointer; flex: none;
+  }
+  .stagerow .classname { width: 210px; flex: none; }
+  .stagerow .stylefield { flex: none; }
+  .stagerow .classid { white-space: nowrap; }
   .runs { font-size: 12px; color: var(--dim); overflow: hidden;
           text-overflow: ellipsis; white-space: nowrap; }
   .runs code { font-family: var(--mono); font-size: 11px; color: var(--text); }
@@ -538,8 +549,7 @@
     background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
     overflow: hidden;
   }
-  .tile.progress { --c: var(--started); }
-  .tile.done     { --c: var(--done); }
+  /* --c, the stage's colour, is set on each tile. */
   .tile:hover { border-color: var(--dim); }
   .tile.last  { border-color: var(--cursor); box-shadow: 0 0 0 1px var(--cursor); }
   .thumb { position: relative; aspect-ratio: 4 / 3; background: #0d0f12; }
@@ -559,9 +569,30 @@
     position: absolute; top: 6px; font: 11px/1.5 var(--mono); padding: 0 6px;
     border-radius: 2px; background: rgba(13, 15, 18, .82); font-variant-numeric: tabular-nums;
   }
-  .tile .idx  { left: 6px; color: var(--dim); }
+  .tile .idx  { left: 30px; color: var(--dim); }
   .tile .chip { right: 6px; color: var(--text); border: 1px solid var(--c); }
-  .tile.done .chip { color: #0d1114; background: var(--done); }
+  .tile.done .chip { color: #0d1114; background: var(--c); }
+  /* Selecting images: a box on each tile, a wash and a ring on the selected. */
+  .tile .tsel {
+    position: absolute; top: 6px; left: 6px; z-index: 1; width: 18px; height: 18px;
+    border: 1.5px solid rgba(255, 255, 255, .75); border-radius: 3px;
+    background: rgba(13, 15, 18, .55); cursor: pointer;
+    opacity: .55; transition: opacity .12s;
+  }
+  .tile:hover .tsel, .tile.selected .tsel, .grid.selecting .tsel { opacity: 1; }
+  .tile.selected .tsel { background: #8ecbff; border-color: #8ecbff; }
+  .tile.selected .tsel::after {
+    content: ""; position: absolute; left: 5px; top: 1px; width: 4px; height: 9px;
+    border: solid #0d1114; border-width: 0 2px 2px 0; transform: rotate(45deg);
+  }
+  .tile.selected { border-color: #8ecbff; box-shadow: 0 0 0 1px #8ecbff; }
+  .tile.selected .thumb::before {
+    content: ""; position: absolute; inset: 0; background: rgba(142, 203, 255, .14); pointer-events: none;
+  }
+  .gridsel { display: inline-flex; align-items: center; gap: 6px; margin-left: 10px; }
+  .gridsel .selcount { color: #8ecbff; font: 12px var(--mono); min-width: 0; }
+  .gridsel .picker:disabled { opacity: .45; }
+  .stagechip span { white-space: nowrap; }
   .empty { color: var(--dim); padding: 40px 20px; text-align: center; }
 </style>
 </head>
@@ -593,12 +624,13 @@
     <button class="badge open-keys" type="button" title="mouse speeds and shortcuts (k)">settings</button>
   </header>
   <div class="toolbar">
-    <div class="tabs" id="tabs" role="tablist">
-      <button class="tab" role="tab" data-f="all">All <span class="n"></span></button>
-      <button class="tab" role="tab" data-f="todo"><i style="--c: var(--pending)"></i>Not started <span class="n"></span></button>
-      <button class="tab" role="tab" data-f="progress"><i style="--c: var(--started)"></i>In progress <span class="n"></span></button>
-      <button class="tab" role="tab" data-f="done"><i style="--c: var(--done)"></i>Signed off <span class="n"></span></button>
-    </div>
+    <div class="tabs" id="tabs" role="tablist" aria-label="Images by stage"></div>
+    <span class="gridsel">
+      <button class="badge" id="selAllShown" type="button" title="Select every image shown: the name filter and the stage tab decide which (ctrl a)">select shown</button>
+      <button class="badge" id="selNone" type="button" title="Deselect all images (esc)" disabled>deselect all</button>
+      <span class="selcount" id="selCount" aria-live="polite"></span>
+      <select id="bulkStage" class="picker" aria-label="Move the selected images to a stage" disabled></select>
+    </span>
     <span class="spacer"></span>
     <input id="search" class="field" type="search" placeholder="Filter by file name  ( / )"
            autocomplete="off" spellcheck="false" aria-label="Filter by file name">
@@ -642,7 +674,7 @@
     <button class="badge approve" id="approve"
             title="copy every shown sam3 box into your annotations">approve</button>
   </span>
-  <button class="badge" id="flag">not signed off</button>
+  <button class="classchip stagechip" id="stageChip" type="button" aria-haspopup="menu" aria-expanded="false"><i id="stageSwatch"></i><span id="stageChipName"></span></button>
   <button class="badge open-keys" type="button" title="mouse speeds and shortcuts (k)">settings</button>
 </header>
 
@@ -695,6 +727,7 @@
 </section>
 
 <div class="classmenu" id="classMenu" role="menu" hidden></div>
+<div class="classmenu" id="stageMenu" role="menu" hidden></div>
 
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
   <div class="keys-head">
@@ -702,6 +735,7 @@
     <div class="tabs" id="setTabs" role="tablist" aria-label="Settings sections">
       <button class="tab" role="tab" type="button" data-tab="appearance">Appearance</button>
       <button class="tab" role="tab" type="button" data-tab="input">Mouse and keys</button>
+      <button class="tab" role="tab" type="button" data-tab="workflow">Workflow</button>
     </div>
     <input id="keysFilter" class="field" type="search" autocomplete="off" spellcheck="false"
            placeholder="Filter settings and shortcuts" aria-label="Filter settings and shortcuts">
@@ -771,12 +805,11 @@ const q = (path, extra) => {
   return BASE + path + "?" + u.toString();
 };
 
-let images = [];        // [{name, boxes, complete}]
+let images = [];        // [{name, boxes, stage}]
 let idx = 0;
 let boxes = [];         // human-owned, editable, PUT back to ANNOTATION_DIR
 let preds = [];         // sam3, read only; edits here live until you approve
 let threshold = 0.20;   // applied to preds only; a view filter, not a rerun
-let complete = false;
 let natW = 0, natH = 0;
 let exems = [];         // this image's picked exemplars, mirrored from the manifest
 let exemSet = null;     // {name, count} for the whole set, kept in step locally
@@ -795,7 +828,6 @@ const el = {
   exemcount: document.getElementById("exemcount"),
   mode: document.getElementById("mode"),
   approve: document.getElementById("approve"),
-  flag: document.getElementById("flag"),
   viewport: document.getElementById("viewport"),
   stage: document.getElementById("stage"),
   photo: document.getElementById("photo"),
@@ -845,6 +877,14 @@ const el = {
   mmFoot: document.querySelector("#minimap .mm-foot"),
   scanPill: document.getElementById("scanPill"),
   classChip: document.getElementById("classChip"),
+  stageChip: document.getElementById("stageChip"),
+  stageSwatch: document.getElementById("stageSwatch"),
+  stageChipName: document.getElementById("stageChipName"),
+  stageMenu: document.getElementById("stageMenu"),
+  selAllShown: document.getElementById("selAllShown"),
+  selNone: document.getElementById("selNone"),
+  selCount: document.getElementById("selCount"),
+  bulkStage: document.getElementById("bulkStage"),
   areaBtn: document.getElementById("areaBtn"),
   classSwatch: document.getElementById("classSwatch"),
   classChipName: document.getElementById("classChipName"),
@@ -1308,14 +1348,6 @@ function deleteSelected() {
   render();
 }
 
-function toggleComplete() {
-  const before = snapshot();
-  complete = !complete;
-  const ev = logEvent("image.signoff", { complete });
-  record(complete ? "sign-off" : "reopening", before, [ev]);
-  touch();
-  render();
-}
 
 el.approve.addEventListener("click", () => approveShown());
 
@@ -1459,8 +1491,7 @@ function renderCounts(shown) {
   el.predcount.textContent = preds.length ? `${shown}/${preds.length} sam3` : "";
   el.approve.textContent = shown ? `approve ${shown}` : "approve";
   el.approve.disabled = shown === 0;
-  el.flag.textContent = complete ? "signed off" : "not signed off";
-  el.flag.classList.toggle("on", complete);
+  renderStageChip();
 }
 
 // ---------------------------------------------------------------- io
@@ -1483,7 +1514,7 @@ async function save() {
     r = await fetch(q(`api/annotation/${encodeURIComponent(name)}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boxes, complete }),
+      body: JSON.stringify({ boxes, stage: stageOf(imageStage).id }),
     });
   } catch (err) {
     dirty = true;
@@ -1496,7 +1527,7 @@ async function save() {
     return false;
   }
   images[idx].boxes = boxes.length;
-  images[idx].complete = complete;
+  images[idx].stage = stageOf(imageStage).id;
   scheduleStrip();                   // its status bar follows the save
   return true;
 }
@@ -1520,7 +1551,7 @@ async function load(i) {
     .filter((p) => !approved.some((b) => iou(p, b) >= ACCEPTED_IOU));
 
   exems = (data.exemplars || []).map(normalise);
-  complete = data.complete;
+  imageStage = data.stage;
   const before = seenClasses.size;
   for (const b of boxes) seenClasses.add(b.cls);   // not predictions: "0" is not a class here
   comments = data.comments || [];
@@ -1751,13 +1782,13 @@ function hist() {
 
 const clone = (list) => list.map((b) => ({ ...b }));
 const snapshot = () =>
-  ({ boxes: clone(boxes), preds: clone(preds), exems: clone(exems), complete });
+  ({ boxes: clone(boxes), preds: clone(preds), exems: clone(exems), stage: imageStage });
 
 function restore(s) {
   boxes = clone(s.boxes);
   preds = clone(s.preds);
   exems = clone(s.exems);
-  complete = s.complete;
+  imageStage = s.stage;
   sel = null;
   multi = [];
 }
@@ -1767,7 +1798,7 @@ function restore(s) {
 function record(label, before, events, extra = {}) {
   const h = hist();
   const after = snapshot();
-  const saves = before.complete !== after.complete
+  const saves = before.stage !== after.stage
     || JSON.stringify(before.boxes) !== JSON.stringify(after.boxes);
   h.undo.push({ label, before, after, saves, run,
                 events: events.filter(Boolean), ...extra });
@@ -1867,6 +1898,10 @@ const COMMANDS = {
 
   "grid.search":       { screen: "dataset", label: "Filter by file name",
                          keys: ["/"], run: () => focusSearch() },
+  "grid.selectShown":  { screen: "dataset", label: "Select every image shown (name filter and stage tab)",
+                         keys: ["Ctrl+a"], run: () => selectShown() },
+  "grid.deselect":     { screen: "dataset", label: "Deselect all images",
+                         keys: ["Escape"], run: () => deselectAll() },
 
   "edit.pointer":      { screen: "editor", group: "Mouse", label: "Draw, move and resize boxes",
                          kind: "drag", keys: ["MouseLeft"], start: (e) => pointerEditStart(e),
@@ -1903,8 +1938,10 @@ const COMMANDS = {
                          keys: ["Ctrl+Shift+v"], run: () => pasteBoxes(true) },
   "comment.add":       { screen: "editor", group: "Edit", label: "Comment: then click where it goes",
                          keys: ["c"], run: () => startCommentPlacement() },
-  "image.signoff":     { screen: "editor", group: "Edit", label: "Sign off, or reopen",
-                         keys: ["f"], run: () => toggleComplete() },
+  "image.stageNext":   { screen: "editor", group: "Edit", label: "Move the image to the next stage",
+                         keys: ["f"], run: () => stageStep(1) },
+  "image.stagePrev":   { screen: "editor", group: "Edit", label: "Move the image back a stage",
+                         keys: ["Shift+f"], run: () => stageStep(-1) },
 
   "pred.approve":      { screen: "editor", group: "SAM3 predictions", label: "Approve the selected sam3 box",
                          keys: ["Enter"], run: () => approveSelected() },
@@ -2337,7 +2374,8 @@ function toggleHelp(force) {
 // Every change is saved at once to the user's own settings file.
 
 const K_TAB = "al.settingsTab";
-let settingsTab = localStorage.getItem(K_TAB) === "input" ? "input" : "appearance";
+let settingsTab = ["input", "workflow"].includes(localStorage.getItem(K_TAB))
+  ? localStorage.getItem(K_TAB) : "appearance";
 
 let capture = null;          // {id, conflict?: {input, owner}, error?: string}
 let swallowKeyUp = null;     // the key that just finished a capture
@@ -2545,6 +2583,11 @@ function renderKeys() {
     b.setAttribute("aria-selected", String(b.dataset.tab === settingsTab));
   }
   el.keysFilter.hidden = settingsTab !== "input";
+  if (settingsTab === "workflow") {
+    renderWorkflow();
+    if (active) focusKey(active);
+    return;
+  }
   if (settingsTab === "appearance") {
     renderAppearance();
     const n = appearanceChangeCount();
@@ -3072,7 +3115,7 @@ async function loadProjectSettings() {
     const r = await fetch(q("api/project-settings"));
     if (!r.ok) throw new Error(`api/project-settings returned ${r.status}`);
     const data = await r.json();
-    projectPrefs = { version: 2, classes: data.classes || [] };
+    projectPrefs = { version: 2, classes: data.classes || [], stages: data.stages || null };
     projectPrefsPath = data.path || "";
     for (const name of data.seen || []) seenClasses.add(name);
     if (data.warning) { console.warn(data.warning); keyStatus(data.warning, true); }
@@ -3083,6 +3126,7 @@ async function loadProjectSettings() {
   ensureActiveClass();
   applyAppearance();
   renderClassChip();
+  fillBulkStage();
 }
 
 let projectSaves = Promise.resolve();
@@ -3161,7 +3205,7 @@ async function renameClass(old, next, input) {
     });
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     const data = await r.json();
-    projectPrefs = { version: 2, classes: data.classes || [] };
+    projectPrefs = { version: 2, classes: data.classes || [], stages: projectPrefs.stages };
     seenClasses.delete(old);
     if (data.boxes) seenClasses.add(next);
     for (const b of boxes) if (b.cls === old) b.cls = next;
@@ -4402,10 +4446,6 @@ function scheduleStrip() {
   if (!strip.frame) strip.frame = requestAnimationFrame(renderStrip);
 }
 
-function stripState(im) {
-  return im.complete ? "s-done" : im.boxes > 0 ? "s-progress" : "s-todo";
-}
-
 function stripTile(i) {
   const im = images[i];
   const t = h("div", "stile");
@@ -4438,8 +4478,9 @@ function renderStrip() {
       el.stripTrack.appendChild(t);
     }
     t.style.transform = `translateX(${STRIP_PAD + (i - idx) * p + strip.offset}px)`;
-    const cls = `stile ${stripState(images[i])}${i === idx ? " current" : ""}`;
+    const cls = "stile" + (i === idx ? " current" : "");
     if (t.className !== cls) t.className = cls;
+    t.style.setProperty("--c", stageOf(images[i].stage).color);   // the stage's colour
   }
   for (const [key, t] of strip.tiles) {
     if (!keep.has(key)) { t.remove(); strip.tiles.delete(key); }
@@ -5225,6 +5266,381 @@ window.addEventListener("keydown", (e) => {
 
 el.areaBtn.addEventListener("click", () => toggleMarquee());
 
+// ---------------------------------------------------------------- stages
+//
+// Where each image is in the project's workflow. The list is per project
+// (settings.json), in order: an image starts in the first stage; f moves the
+// open image on to the next, shift f back; any stage can be picked from the
+// chip in the header, and the grid moves a selection of images at once.
+// Stages that count as done drive the progress and the ✓ on tiles.
+//
+// Each stage has a fixed id; renaming it changes only its name, so nothing
+// stored needs rewriting - and a workflow canvas can later connect stages by
+// their ids. Removing a stage leaves its images' entries alone: they show in
+// the first stage, and come back if a stage with that id is added again.
+
+const DEFAULT_STAGES = [
+  { id: "none", name: "No stage", color: "#4a5460", done: false },
+  { id: "annotating", name: "Annotating", color: "#8a7fd4", done: false },
+  { id: "review", name: "In review", color: "#e0a13a", done: false },
+  { id: "signed_off", name: "Signed off", color: "#4bd6a4", done: true },
+];
+
+let imageStage = "";          // the open image's stage id
+
+function stageList() {
+  return projectPrefs.stages && projectPrefs.stages.length ? projectPrefs.stages : DEFAULT_STAGES;
+}
+/** A stage by id; an id the project no longer has reads as the first stage,
+    as it does on the server. */
+function stageOf(id) {
+  const list = stageList();
+  return list.find((s) => s.id === id) || list[0];
+}
+
+// ---------------------------------------------------------------- in the editor
+
+function renderStageChip() {
+  const st = stageOf(imageStage);
+  el.stageSwatch.style.background = st.color;
+  el.stageChipName.textContent = st.name + (st.done ? " \u2713" : "");
+  el.stageChip.title = "Stage of this image: f moves it on, shift f back, click to choose";
+}
+
+/** Move the open image to a stage. Undoable like any edit; the server logs it. */
+function setImageStage(id) {
+  if (view !== "editor" || !images[idx] || id === stageOf(imageStage).id) return;
+  const before = snapshot();
+  imageStage = id;
+  record(`stage ${stageOf(id).name}`, before, []);
+  touch();
+  render();
+  flash(`Stage: ${stageOf(id).name}`);
+}
+
+function stageStep(dir) {
+  const list = stageList();
+  const i = list.findIndex((s) => s.id === stageOf(imageStage).id);
+  const j = clamp(i + dir, 0, list.length - 1);
+  if (j === i) {
+    flash(dir > 0 ? `${list[i].name} is the last stage` : `${list[i].name} is the first stage`);
+    return;
+  }
+  setImageStage(list[j].id);
+}
+
+function renderStageMenu() {
+  const frag = document.createDocumentFragment();
+  for (const st of stageList()) {
+    const b = h("button", "classitem" + (st.id === stageOf(imageStage).id ? " on" : ""));
+    b.type = "button";
+    b.setAttribute("role", "menuitem");
+    const sw = h("i");
+    sw.style.background = st.color;
+    b.append(h("span", "k", ""), sw, h("span", "n", st.name + (st.done ? " \u2713" : "")));
+    b.addEventListener("click", () => { closeStageMenu(); setImageStage(st.id); });
+    frag.appendChild(b);
+  }
+  const edit = h("button", "classitem edit", "edit stages\u2026");
+  edit.type = "button";
+  edit.addEventListener("click", () => {
+    closeStageMenu();
+    settingsTab = "workflow";
+    localStorage.setItem(K_TAB, settingsTab);
+    toggleKeys();
+  });
+  frag.appendChild(edit);
+  el.stageMenu.replaceChildren(frag);
+}
+function openStageMenu() {
+  renderStageMenu();
+  const r = el.stageChip.getBoundingClientRect();
+  el.stageMenu.style.left = `${Math.round(Math.min(r.left, innerWidth - 220))}px`;
+  el.stageMenu.style.top = `${Math.round(r.bottom + 4)}px`;
+  el.stageMenu.hidden = false;
+  el.stageChip.setAttribute("aria-expanded", "true");
+}
+function closeStageMenu() {
+  el.stageMenu.hidden = true;
+  el.stageChip.setAttribute("aria-expanded", "false");
+}
+el.stageChip.addEventListener("click", () => (el.stageMenu.hidden ? openStageMenu() : closeStageMenu()));
+window.addEventListener("mousedown", (e) => {
+  if (!el.stageMenu.hidden && !e.target.closest("#stageMenu, #stageChip")) closeStageMenu();
+}, true);
+el.stageMenu.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeStageMenu(); el.stageChip.focus(); }
+});
+
+// ---------------------------------------------------------------- selecting images in the grid
+//
+// A checkbox on each tile (or ctrl click on the tile); shift click selects the
+// run from the last one clicked. "select shown" (ctrl a) selects exactly the
+// images the name filter and the stage tab leave on screen - which is how
+// images are selected by name and by stage - replacing what was selected, so
+// nothing out of sight comes along. Clicked selections outlive filter
+// changes; a move says how many selected images are not on screen.
+
+const gridSel = new Set();    // image names
+let gridAnchor = -1;          // index into `images` of the last box clicked
+
+function shownImages() {
+  const needle = el.search.value.trim().toLowerCase();
+  return images.filter((im) => (!needle || im.name.toLowerCase().includes(needle))
+    && (filter === "all" || stageOf(im.stage).id === filter));
+}
+
+function renderGridSelection() {
+  const n = gridSel.size;
+  el.selCount.textContent = n ? `${n} selected` : "";
+  el.selNone.disabled = !n;
+  el.bulkStage.disabled = !n;
+  for (const t of el.grid.children) {
+    const on = gridSel.has(t.dataset.name);
+    t.classList.toggle("selected", on);
+    const box = t.querySelector(".tsel");
+    if (box) box.setAttribute("aria-checked", String(on));
+  }
+}
+
+function fillBulkStage() {
+  const opts = [new Option("move selected to\u2026", "")];
+  for (const st of stageList()) opts.push(new Option(st.name, st.id));
+  el.bulkStage.replaceChildren(...opts);
+}
+
+function selectShown() {
+  gridSel.clear();
+  for (const im of shownImages()) gridSel.add(im.name);
+  renderGridSelection();
+  status(`${gridSel.size} selected`);
+}
+function deselectAll() {
+  gridSel.clear();
+  gridAnchor = -1;
+  renderGridSelection();
+}
+
+el.grid.addEventListener("click", (e) => {
+  const t = e.target.closest(".tile");
+  if (!t) return;
+  const onBox = !!e.target.closest(".tsel");
+  if (!onBox && !(e.ctrlKey || e.metaKey)) return;       // a plain click opens the image
+  e.preventDefault();
+  const i = images.findIndex((im) => im.name === t.dataset.name);
+  if (e.shiftKey && gridAnchor >= 0) {
+    // The run between the last clicked and this one, among the tiles shown.
+    const order = [...el.grid.children].map((c) => c.dataset.name);
+    const a = order.indexOf(images[gridAnchor].name), b = order.indexOf(t.dataset.name);
+    if (a >= 0 && b >= 0) {
+      for (const name of order.slice(Math.min(a, b), Math.max(a, b) + 1)) gridSel.add(name);
+    }
+  } else if (gridSel.has(t.dataset.name)) {
+    gridSel.delete(t.dataset.name);
+  } else {
+    gridSel.add(t.dataset.name);
+  }
+  gridAnchor = i;
+  renderGridSelection();
+});
+
+el.selAllShown.addEventListener("click", selectShown);
+el.selNone.addEventListener("click", deselectAll);
+el.bulkStage.addEventListener("change", async () => {
+  const id = el.bulkStage.value;
+  el.bulkStage.value = "";
+  if (!id || !gridSel.size) return;
+  const st = stageOf(id);
+  const names = [...gridSel];
+  const shown = new Set(shownImages().map((im) => im.name));
+  const hidden = names.filter((n) => !shown.has(n)).length;
+  const ask = `Move ${plural(names.length, "image", "images")} to \u201c${st.name}\u201d?`
+    + (hidden ? `\n\n${hidden} of them ${hidden === 1 ? "is" : "are"} selected but not shown with the current filter and tab.` : "");
+  if ((names.length > 1 || hidden) && !window.confirm(ask)) return;
+  try {
+    const r = await fetch(BASE + "api/stages?" + new URLSearchParams({ project }), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ images: names, stage: id }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    const data = await r.json();
+    for (const im of images) if (gridSel.has(im.name)) im.stage = id;
+    renderGrid();
+    status(`${plural(data.moved, "image", "images")} moved to ${st.name}`
+      + (data.moved < names.length ? ` (${names.length - data.moved} already there)` : ""));
+  } catch (err) {
+    status(`Not moved: ${err.message}`, true);
+  }
+});
+
+// ---------------------------------------------------------------- the Workflow tab in settings
+
+/** Edits go to a copy of the list the project uses, so the defaults become the
+    project's own list on the first change. */
+function editableStages() {
+  if (!projectPrefs.stages || !projectPrefs.stages.length) {
+    projectPrefs.stages = DEFAULT_STAGES.map((s) => ({ ...s }));
+  }
+  return projectPrefs.stages;
+}
+
+function stagesChanged() {
+  saveProjectSettings();
+  fillBulkStage();
+  renderStageChip();
+  if (view === "dataset") renderGrid();
+  scheduleStrip();
+}
+
+function stageCounts() {
+  const counts = {};
+  for (const im of images) {
+    const id = stageOf(im.stage).id;
+    counts[id] = (counts[id] || 0) + 1;
+  }
+  return counts;
+}
+
+function stageIdFor(name) {
+  const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 30) || "stage";
+  const taken = new Set(stageList().map((s) => s.id));
+  let id = /^[a-z0-9]/.test(base) ? base : "s_" + base;
+  for (let k = 2; taken.has(id); k++) id = `${base}_${k}`;
+  return id;
+}
+
+function stageRow(st, i, list, counts) {
+  const row = h("div", "keyrow stagerow");
+  const color = h("input");
+  color.type = "color";
+  color.value = st.color;
+  color.dataset.f = `stage:${st.id}:color`;
+  color.setAttribute("aria-label", `Colour of ${st.name}`);
+  color.addEventListener("input", () => { editableStages()[i].color = color.value; renderStageChip(); });
+  color.addEventListener("change", () => { editableStages()[i].color = color.value; stagesChanged(); });
+
+  const name = h("input", "field classname");
+  name.type = "text";
+  name.maxLength = 40;
+  name.value = st.name;
+  name.dataset.f = `stage:${st.id}:name`;
+  name.setAttribute("aria-label", `Name of stage ${i + 1}`);
+  name.addEventListener("change", () => {
+    const v = name.value.trim();
+    const clash = list.some((o, k) => k !== i && o.name.toLowerCase() === v.toLowerCase());
+    if (!v || clash) {
+      keyStatus(v ? `There is already a stage called ${v}.` : "A stage needs a name.", true);
+      name.value = st.name;
+      return;
+    }
+    editableStages()[i].name = v;
+    stagesChanged();
+  });
+  name.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") { e.preventDefault(); name.blur(); }
+    if (e.key === "Escape") { e.preventDefault(); name.value = st.name; name.blur(); }
+  });
+
+  const done = h("label", "stylefield toggle");
+  const cb = h("input");
+  cb.type = "checkbox";
+  cb.checked = !!st.done;
+  cb.dataset.f = `stage:${st.id}:done`;
+  cb.addEventListener("change", () => { editableStages()[i].done = cb.checked; stagesChanged(); });
+  done.append(cb, h("span", "", "done"));
+  done.title = "Images here count as finished: the project's progress, and the \u2713 on their tiles";
+
+  const n = project ? counts[st.id] || 0 : null;
+  const info = h("span", "classid", (i === 0 ? "start \u00b7 " : "")
+    + (n === null ? "" : plural(n, "image", "images")));
+
+  const actions = h("span", "keyactions");
+  const small = (text, label, f, fn) => {
+    const b = h("button", "badge", text);
+    b.type = "button";
+    b.title = label;
+    b.setAttribute("aria-label", `${label}: ${st.name}`);
+    b.dataset.f = f;
+    b.addEventListener("click", fn);
+    actions.appendChild(b);
+  };
+  const move = (by) => {
+    const a = editableStages();
+    [a[i], a[i + by]] = [a[i + by], a[i]];
+    stagesChanged();
+  };
+  if (i > 0) small("\u2191", "Move up", `stage:${st.id}:up`, () => move(-1));
+  if (i < list.length - 1) small("\u2193", "Move down", `stage:${st.id}:down`, () => move(1));
+  if (list.length > 1) {
+    small("remove", "Remove this stage", `stage:${st.id}:remove`, () => {
+      const first = list[i === 0 ? 1 : 0];
+      const msg = `Remove \u201c${st.name}\u201d? Its ${plural(n, "image", "images")} will show in `
+        + `\u201c${first.name}\u201d.`;
+      if (n && !window.confirm(msg)) return;
+      editableStages().splice(i, 1);
+      if (filter === st.id) filter = "all";
+      stagesChanged();
+    });
+  }
+  const wrap = h("span", "chips");
+  wrap.append(color, name, done, info);
+  row.append(h("span", "classkey", String(i + 1)), wrap, actions);
+  return row;
+}
+
+function renderWorkflow() {
+  const frag = document.createDocumentFragment();
+  const sec = h("section", "keys-screen");
+  sec.appendChild(h("h3", "", "Stages"));
+  if (!project) {
+    sec.appendChild(h("p", "keyhint", "Open a project to set its stages."));
+  } else {
+    sec.appendChild(h("p", "keyhint",
+      `The stages of ${project}, in order. An image starts in the first; in the editor f moves `
+      + "it to the next and shift f back, and the stage chip in the header picks any. In the grid, "
+      + "select images and move them together. Stages marked done count as finished - the "
+      + "project's progress, and the \u2713 on tiles. Renaming a stage keeps its images in it."));
+    const list = stageList(), counts = stageCounts();
+    list.forEach((st, i) => sec.appendChild(stageRow(st, i, list, counts)));
+
+    const add = h("div", "keyrow addclass");
+    const input = h("input", "field classname");
+    input.type = "text";
+    input.maxLength = 40;
+    input.placeholder = "new stage name";
+    input.dataset.f = "stage:add:name";
+    input.setAttribute("aria-label", "Name of a new stage");
+    const btn = h("button", "badge", "add stage");
+    btn.type = "button";
+    btn.dataset.f = "stage:add";
+    const go = () => {
+      const v = input.value.trim();
+      if (!v) return;
+      if (stageList().some((s) => s.name.toLowerCase() === v.toLowerCase())) {
+        keyStatus(`There is already a stage called ${v}.`, true);
+        return;
+      }
+      const a = editableStages();
+      // Before the last done stage, where a new step usually belongs.
+      const at = a.map((s) => s.done).lastIndexOf(true);
+      a.splice(at > 0 ? at : a.length, 0,
+               { id: stageIdFor(v), name: v, color: PALETTE[a.length % PALETTE.length], done: false });
+      stagesChanged();
+      keyStatus(`Added ${v}.`);
+      focusKey("stage:add:name");
+    };
+    btn.addEventListener("click", go);
+    input.addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); go(); } });
+    add.append(input, btn);
+    sec.appendChild(add);
+  }
+  frag.appendChild(sec);
+  el.keysList.replaceChildren(frag);
+  el.keysChanged.textContent = project ? plural(stageList().length, "stage", "stages") : "";
+  el.keysResetAll.disabled = true;
+}
+
 // ---------------------------------------------------------------- small commands
 
 /** Zoom about a point in viewport pixels; the centre when none is given. */
@@ -5265,6 +5681,7 @@ function toggleMode() {
 
 function escapeKey() {
   if (!el.classMenu.hidden) { closeClassMenu(); return; }
+  if (!el.stageMenu.hidden) { closeStageMenu(); return; }
   if (commentPlacing) { cancelCommentPlacement(); flash("No comment placed"); return; }
   if (openComment) { closeCommentPopup(); return; }
   if (marqueeArmed || marquee) { disarmMarquee(); render(); flash("Area select off"); return; }
@@ -5320,7 +5737,6 @@ el.thresh.addEventListener("keydown", (e) => {
   e.stopPropagation();
 });
 
-el.flag.addEventListener("click", () => toggleComplete());
 window.addEventListener("resize", () => {
   if (view !== "editor") return;   // a hidden viewport measures 0 x 0
   if (natW) fitToViewport();
@@ -5399,7 +5815,7 @@ function pruneStorage() {
 
 const K_CELL = "al.cell";
 
-let filter = "all";       // grid tab: all | todo | progress | done
+let filter = "all";       // grid tab: all, or a stage id
 let lastOpened = null;    // image to ring and scroll to when back on the grid
 
 const hashFor = (p, name) =>
@@ -5544,23 +5960,26 @@ function renderProjects() {
     if (p.name === defaultProject) title.appendChild(h("span", "tag", "in config"));
     title.appendChild(h("span", "total", plural(p.images, "image", "images")));
 
-    const done = p.signed_off || 0, started = p.in_progress || 0;
-    const todo = Math.max(0, p.images - done - started);
+    // One segment per stage, in the project's order and colours; the stats
+    // name every stage with images in it.
+    const stages = p.stages || [], counts = p.stage_counts || {};
     const pct = (n) => (p.images ? (100 * n) / p.images : 0) + "%";
     const meter = h("div", "meter");
-    const md = h("span", "d"); md.style.width = pct(done);
-    const mp = h("span", "p"); mp.style.width = pct(started);
-    meter.append(md, mp);
-    meter.title = `${done} signed off, ${started} in progress, ${todo} not started`;
-
     const stats = h("div", "stats");
-    for (const [cls, n, label] of [["d", done, "signed off"],
-                                   ["p", started, "in progress"],
-                                   ["t", todo, "not started"]]) {
-      const s = h("span", cls);
-      s.append(h("b", "", String(n)), " " + label);
-      stats.appendChild(s);
+    for (const st of stages) {
+      const n = counts[st.id] || 0;
+      if (!n) continue;
+      const seg = h("span");
+      seg.style.width = pct(n);
+      seg.style.background = st.color;
+      meter.appendChild(seg);
+      const line = h("span");
+      const b = h("b", "", String(n));
+      b.style.color = st.color;
+      line.append(b, " " + st.name.toLowerCase());
+      stats.appendChild(line);
     }
+    meter.title = stages.map((st) => `${counts[st.id] || 0} ${st.name.toLowerCase()}`).join(", ");
 
     const runs = h("div", "runs");
     if (p.runs.length) {
@@ -5593,6 +6012,9 @@ async function openProject(name) {
   sel = null; dirty = false; idx = 0; natW = 0; lastOpened = null;
   clearTimeout(saveTimer);
   el.search.value = "";
+  gridSel.clear();
+  gridAnchor = -1;
+  filter = "all";              // stage ids are the project's own
   status("scanning image folder\u2026");
 
   try {
@@ -5622,7 +6044,6 @@ async function refreshExemplarSet() {
   showSet();
 }
 
-const stateOf = (im) => (im.complete ? "done" : im.boxes > 0 ? "progress" : "todo");
 
 function showDataset() {
   showView("dataset");
@@ -5649,50 +6070,72 @@ function thumbTier() {
 
 function renderGrid() {
   const needle = el.search.value.trim().toLowerCase();
-  const counts = { all: 0, todo: 0, progress: 0, done: 0 };
+  const stages = stageList();
+  if (filter !== "all" && !stages.some((st) => st.id === filter)) filter = "all";
+  const counts = { all: 0 };
   const size = thumbTier();
   const frag = document.createDocumentFragment();
 
   images.forEach((im, i) => {
     if (needle && !im.name.toLowerCase().includes(needle)) return;
-    const st = stateOf(im);
-    counts.all++; counts[st]++;
-    if (filter !== "all" && filter !== st) return;
+    const st = stageOf(im.stage);
+    counts.all++;
+    counts[st.id] = (counts[st.id] || 0) + 1;
+    if (filter !== "all" && filter !== st.id) return;
     frag.appendChild(tile(im, i, st, size));
   });
   el.grid.replaceChildren(frag);
 
-  for (const b of el.tabs.querySelectorAll(".tab")) {
-    b.setAttribute("aria-selected", String(b.dataset.f === filter));
-    b.querySelector(".n").textContent = counts[b.dataset.f];
-  }
+  // One tab per stage, in the project's order, counted under the name filter.
+  const tabs = [{ id: "all", name: "All" }, ...stages].map((st) => {
+    const b = h("button", "tab");
+    b.type = "button";
+    b.setAttribute("role", "tab");
+    b.dataset.f = st.id;
+    b.setAttribute("aria-selected", String(st.id === filter));
+    if (st.color) {
+      const sw = h("i");
+      sw.style.setProperty("--c", st.color);
+      b.appendChild(sw);
+    }
+    b.append(st.name + " ", h("span", "n", String(counts[st.id] || 0)));
+    return b;
+  });
+  el.tabs.replaceChildren(...tabs);
+  renderGridSelection();
 
   const shown = el.grid.childElementCount;
   el.gridEmpty.hidden = shown > 0 || !images.length;
   if (!shown && images.length) {
     el.gridEmpty.textContent = needle
       ? `No image names contain \u201c${el.search.value.trim()}\u201d here. Clear the filter or pick another tab.`
-      : "Nothing in this tab yet.";
+      : "No image is in this stage.";
   }
 }
 
 function tile(im, i, st, size) {
-  const a = h("a", "tile " + st);
+  const a = h("a", "tile" + (st.done ? " done" : ""));
   a.href = hashFor(project, im.name);
-  a.title = im.name;
+  a.title = `${im.name} \u2013 ${st.name}`;
   a.dataset.name = im.name;
+  a.style.setProperty("--c", st.color);
   if (im.name === lastOpened) a.classList.add("last");
 
   const th = h("div", "thumb");
   const img = h("img");
   img.alt = ""; img.loading = "lazy"; img.decoding = "async";
   img.src = thumbUrl(project, im.name, size);
-  th.append(img, h("span", "idx", String(i + 1)));
+  const box = h("span", "tsel");
+  box.setAttribute("role", "checkbox");
+  box.setAttribute("aria-checked", "false");
+  box.setAttribute("aria-label", `Select ${im.name}`);
+  box.title = "select (shift: the run from the last one; ctrl click on a tile also selects)";
+  th.append(img, box, h("span", "idx", String(i + 1)));
 
-  // Signed off with no boxes is a confirmed negative, which is worth saying
-  // out loud: it is a training example, not a forgotten image.
+  // Done with no boxes is a confirmed negative, which is worth saying out
+  // loud: it is a training example, not a forgotten image.
   let chip = "";
-  if (im.complete) chip = im.boxes ? "\u2713 " + plural(im.boxes, "box", "boxes") : "\u2713 negative";
+  if (st.done) chip = im.boxes ? "\u2713 " + plural(im.boxes, "box", "boxes") : "\u2713 negative";
   else if (im.boxes) chip = plural(im.boxes, "box", "boxes");
   if (chip) th.appendChild(h("span", "chip", chip));
 

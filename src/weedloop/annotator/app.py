@@ -93,10 +93,17 @@ browser counts while the view is zoomed in far enough and the annotator is
 active, and sends what it counted; the server adds it up. This is what the
 minimap colours, and what "a full pass was done" can later be checked against.
 
-Completion flags (one file per image, in <project>/flags/): a single character,
-0 or 1. 1 means "every instance in this image is boxed" - so an image with flag
-1 and zero boxes is a confirmed negative, which is a useful training example.
-A missing flag file means the image has not been signed off.
+Stages (<project>/stages.json): where each image is in the project's workflow
+- by default No stage, Annotating, In review, Signed off; the list is per
+project, in settings.json, each stage with a fixed id, a name, a colour and
+whether it counts as done. An image in a done stage with zero boxes is a
+confirmed negative, a useful training example. One file for the project, so a
+bulk change is one atomic write; an image without an entry is in the first
+stage. Every change goes into the event log, with who made it.
+
+It replaces the older flags/ folder (one file per image, 0 or 1): the first
+time a project is opened, each flag 1 becomes the first done stage. flags/ is
+left as it was, and no longer read after that.
 
 Run:
     python Annotator.py --config Sam3N10.yaml
@@ -165,7 +172,7 @@ EVENT_TYPES = frozenset({
     "box.draw", "box.edit", "box.delete",
     "pred.approve", "pred.adjust", "pred.reject",
     "exemplar.pick", "exemplar.drop",
-    "box.class", "box.paste",
+    "box.class", "box.paste", "image.stage",
     "comment.add", "comment.edit", "comment.delete", "class.rename",
     "history.undo", "history.redo",
 })
@@ -331,7 +338,8 @@ class Annotation(BaseModel):
     """
 
     boxes: list[Box]
-    complete: bool
+    # The image's stage, when it changed; None leaves it as it is.
+    stage: str | None = None
 
     @field_validator("boxes")
     @classmethod
@@ -544,17 +552,100 @@ def exemplar_boxes(
     return out
 
 
-def read_flag(project: Project, name: str) -> bool:
-    path = flag_path(project, name)
-    return path.is_file() and path.read_text().strip() == "1"
+def stage_defs(project: Project) -> list[dict]:
+    """The project's stages, from settings.json, or the defaults. Tolerant:
+    a file it cannot read gives the defaults, never an error here."""
+    try:
+        raw = json.loads(project_settings_path(project).read_text(encoding="utf-8"))
+        stages = raw.get("stages") if isinstance(raw, dict) else None
+        if stages:
+            return [StageDef.model_validate(st).model_dump() for st in stages]
+    except (OSError, ValueError):
+        pass
+    return [dict(st) for st in DEFAULT_STAGES]
 
 
-def write_flag(project: Project, name: str, complete: bool) -> None:
-    project.flags_dir.mkdir(parents=True, exist_ok=True)
-    path = flag_path(project, name)
-    tmp = path.with_suffix(".txt.tmp")
-    tmp.write_text("1" if complete else "0")
+def stages_path(project: Project) -> Path:
+    return project.annotations_dir.parent / "stages.json"
+
+
+_stage_cache: dict[str, dict[str, dict]] = {}   # stages.json path -> {image: {stage, t, by}}
+_stage_lock = threading.Lock()
+
+
+def _write_stages(path: Path, entries: dict[str, dict]) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+    tmp.write_text(json.dumps({"version": 1, "images": entries}, indent=0,
+                              ensure_ascii=False, sort_keys=True), encoding="utf-8")
     tmp.replace(path)
+
+
+def image_stages(project: Project) -> dict[str, dict]:
+    """{image: {stage, t, by}} for the project, read once and then kept.
+
+    Without a stages.json the project still has the old flags/ folder: each
+    flag 1 becomes the first done stage (Signed off, by default) and the file
+    is written, once. flags/ itself is left as it was."""
+    path = stages_path(project)
+    key = str(path)
+    with _stage_lock:
+        if key in _stage_cache:
+            return _stage_cache[key]
+        entries: dict[str, dict] = {}
+        if path.is_file():
+            try:
+                entries = json.loads(path.read_text(encoding="utf-8")).get("images") or {}
+            except (OSError, ValueError) as exc:
+                raise HTTPException(500, f"{path.name} could not be read: {exc}") from exc
+        else:
+            done = next((st["id"] for st in stage_defs(project) if st["done"]), None)
+            if done and project.flags_dir.is_dir():
+                by_stem = {Path(n).stem: n for n in project.image_names()}
+                for f in project.flags_dir.glob("*.txt"):
+                    try:
+                        if f.stem in by_stem and f.read_text().strip() == "1":
+                            entries[by_stem[f.stem]] = {"stage": done, "t": now(),
+                                                        "by": "flags/"}
+                    except OSError:
+                        continue
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _write_stages(path, entries)
+        _stage_cache[key] = entries
+        return entries
+
+
+def stage_of(entries: dict[str, dict], name: str, defs: list[dict]) -> str:
+    """An image's stage id. No entry, or a stage the project no longer has
+    (it was removed from the list): the first stage."""
+    sid = (entries.get(name) or {}).get("stage")
+    return sid if any(st["id"] == sid for st in defs) else defs[0]["id"]
+
+
+def set_stages(project: Project, names: list[str], stage: str) -> list[tuple[str, str]]:
+    """Move images to a stage, in one write, and log each move. Returns
+    [(image, previous stage)] for the images that actually moved."""
+    defs = stage_defs(project)
+    if not any(st["id"] == stage for st in defs):
+        raise HTTPException(422, f"no stage {stage!r} in this project")
+    entries = image_stages(project)
+    moved = []
+    with _stage_lock:
+        for name in names:
+            before = stage_of(entries, name, defs)
+            if before != stage or name not in entries:
+                entries[name] = {"stage": stage, "t": now(), "by": ACTOR}
+                if before != stage:
+                    moved.append((name, before))
+        if moved or names:
+            _write_stages(stages_path(project), entries)
+    if moved:
+        stamp, ct = now(), int(datetime.now(timezone.utc).timestamp() * 1000)
+        event_log(project).append([{
+            "t": stamp, "actor": ACTOR, "project": project.name, "id": uuid.uuid4().hex,
+            "type": "image.stage", "ct": ct, "session": "server", "image": name,
+            "run": None, "data": {"from": before, "to": stage, "bulk": len(names) > 1},
+        } for name, before in moved])
+    return moved
 
 
 # --------------------------------------------------------------------------
@@ -927,6 +1018,37 @@ class PersonalStyles(BaseModel):
 
 PROJECT_SETTINGS_SCHEMA = 2
 
+# The stages a project starts with. The ids are what stages.json and the
+# events store: renaming a stage keeps its id, so nothing needs rewriting.
+DEFAULT_STAGES = [
+    {"id": "none", "name": "No stage", "color": "#4a5460", "done": False},
+    {"id": "annotating", "name": "Annotating", "color": "#8a7fd4", "done": False},
+    {"id": "review", "name": "In review", "color": "#e0a13a", "done": False},
+    {"id": "signed_off", "name": "Signed off", "color": "#4bd6a4", "done": True},
+]
+_STAGE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+class StageDef(BaseModel):
+    id: str
+    name: str = Field(min_length=1, max_length=40)
+    color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    done: bool = False                   # counts as finished: progress, the ✓
+
+    @field_validator("id")
+    @classmethod
+    def _slug(cls, v: str) -> str:
+        if not _STAGE_ID.match(v):
+            raise ValueError(f"a stage id is lower-case letters, digits, _ and -: {v!r}")
+        return v
+
+    @field_validator("name")
+    @classmethod
+    def _printable(cls, v: str) -> str:
+        if any(ord(ch) < 32 for ch in v) or not v.strip():
+            raise ValueError("a stage name is printable and not blank")
+        return v.strip()
+
 
 class ClassDef(BaseModel):
     name: str
@@ -947,6 +1069,24 @@ class ProjectSettings(BaseModel):
 
     version: int = PROJECT_SETTINGS_SCHEMA
     classes: list[ClassDef] = Field(default_factory=list)
+    # The workflow, in order; the first stage is where an image starts. None:
+    # the defaults. A workflow canvas will later connect these by id.
+    stages: list[StageDef] | None = None
+
+    @field_validator("stages")
+    @classmethod
+    def _stage_list(cls, stages: list[StageDef] | None) -> list[StageDef] | None:
+        if stages is None:
+            return None
+        if not stages:
+            raise ValueError("a project needs at least one stage")
+        ids = [st.id for st in stages]
+        if len(set(ids)) != len(ids):
+            raise ValueError("stage ids must be unique")
+        names = [st.name.lower() for st in stages]
+        if len(set(names)) != len(names):
+            raise ValueError("stage names must be unique")
+        return stages
 
     @field_validator("version")
     @classmethod
@@ -1152,13 +1292,17 @@ def list_projects(cfg: CfgDep) -> dict:
             })
         runs.sort(key=lambda d: d["modified"], reverse=True)
         names = p.image_names()
-        signed, started = progress(p, names)
+        defs = stage_defs(p)
+        entries = image_stages(p)
+        counts = {st["id"]: 0 for st in defs}
+        for n in names:
+            counts[stage_of(entries, n, defs)] += 1
         out.append({
             "name": name,
             "runs": runs,
             "images": len(names),
-            "signed_off": signed,
-            "in_progress": started,
+            "stages": defs,
+            "stage_counts": counts,
             "covers": spread(names, 3),
         })
     return {
@@ -1174,40 +1318,6 @@ def spread(names: list[str], k: int) -> list[str]:
     if len(names) <= k:
         return list(names)
     return [names[round(i * (len(names) - 1) / (k - 1))] for i in range(k)]
-
-
-def progress(project: Project, names: list[str]) -> tuple[int, int]:
-    """(signed off, in progress) for the project card.
-
-    Counted by stem against the current image list, so a flag or annotation
-    left behind by an image that has since been removed does not inflate
-    either number. "In progress" means boxes exist but no sign-off - the same
-    three states the grid and the image strip colour by.
-
-    Annotated is judged by file size rather than by reading each file: an
-    empty annotation file is exactly what an image with every box deleted
-    leaves behind.
-    """
-    stems = {Path(n).stem for n in names}
-    signed: set[str] = set()
-    if project.flags_dir.is_dir():
-        for f in project.flags_dir.glob("*.txt"):
-            if f.stem not in stems:
-                continue
-            try:
-                if f.read_text().strip() == "1":
-                    signed.add(f.stem)
-            except OSError:
-                pass
-    boxed: set[str] = set()
-    if project.annotations_dir.is_dir():
-        for f in project.annotations_dir.glob("*.txt"):
-            try:
-                if f.stem in stems and f.stat().st_size > 0:
-                    boxed.add(f.stem)
-            except OSError:
-                pass
-    return len(signed), len(boxed - signed)
 
 
 @app.post("/api/run")
@@ -1291,12 +1401,13 @@ def list_images(project: ProjectDep) -> list[dict]:
     index when a project gets large - see the note at the bottom of the file.
     """
     out = []
+    entries, defs = image_stages(project), stage_defs(project)
     for name in project.image_names():
         path = annotation_path(project, name)
         n = 0
         if path.is_file():
             n = len([ln for ln in path.read_text().splitlines() if ln.strip()])
-        out.append({"name": name, "boxes": n, "complete": read_flag(project, name)})
+        out.append({"name": name, "boxes": n, "stage": stage_of(entries, name, defs)})
     return out
 
 
@@ -1395,7 +1506,7 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "boxes": [b.model_dump() for b in read_annotation(project, name)],
         "predictions": [b.model_dump() for b in read_predictions(project, run, name)],
         "exemplars": exemplar_boxes(project, run, name),
-        "complete": read_flag(project, name),
+        "stage": stage_of(image_stages(project), name, stage_defs(project)),
         "active_ms": event_log(project).active_ms(name),
         "coverage": read_coverage(project, name),
         "comments": read_comments(project, name),
@@ -1404,12 +1515,15 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
 
 @app.put("/api/annotation/{name}")
 def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> dict:
-    """No run parameter: annotations and flags are project-scoped, and a run
+    """No run parameter: annotations and stages are project-scoped, and a run
     must never be able to influence where hand labels land."""
     image_path(project, name)  # validates the name
     with _annotation_lock:
         write_annotation(project, name, annotation.boxes)
-    write_flag(project, name, annotation.complete)
+    if annotation.stage is not None:
+        defs = stage_defs(project)
+        if stage_of(image_stages(project), name, defs) != annotation.stage:
+            set_stages(project, [name], annotation.stage)
     note_classes(project, annotation.boxes)
     return {"saved": len(annotation.boxes)}
 
@@ -1522,6 +1636,7 @@ def get_project_settings(project: ProjectDep) -> dict:
             warning = (f"{display_path(path)} could not be read ({first}); using the "
                        f"default class list. The file is kept aside on your next change.")
     return {**ps.model_dump(exclude_none=True),
+            "stages": stage_defs(project) if ps.stages is None else [st.model_dump() for st in ps.stages],
             "seen": sorted(seen_classes(project)),
             "path": display_path(path), "warning": warning, "note": note}
 
@@ -1532,6 +1647,23 @@ def put_project_settings(project: ProjectDep, ps: ProjectSettings) -> dict:
     with _settings_lock:
         write_settings_file(path, ps, ProjectSettings.model_validate_json)
     return {"saved": True, "path": display_path(path)}
+
+
+class StageChange(BaseModel):
+    images: list[str] = Field(min_length=1, max_length=100_000)
+    stage: str
+
+
+@app.post("/api/stages")
+def change_stages(project: ProjectDep, req: StageChange) -> dict:
+    """Move many images to one stage at once - the grid's selection. One write,
+    one log entry per image that moved."""
+    known = set(project.image_names())
+    unknown = [n for n in req.images if n not in known]
+    if unknown:
+        raise HTTPException(404, f"{len(unknown)} unknown image(s), e.g. {unknown[0]!r}")
+    moved = set_stages(project, req.images, req.stage)
+    return {"moved": len(moved), "stage": req.stage}
 
 
 @app.get("/api/classes/counts")
