@@ -96,13 +96,23 @@ minimap colours, and what "a full pass was done" can later be checked against.
 Stages (<project>/stages.json): where each image is in the project's workflow
 - by default No stage, Annotating, In review, Signed off; the list is per
 project, in settings.json, each stage with a fixed id, a name, a colour and
-whether it counts as done. An image in a done stage with zero boxes is a
-confirmed negative, a useful training example. One file for the project, so a
+instructions for whoever works on it. The LAST stage is "signed off": the
+workflow completed. An image there with zero boxes is a confirmed negative, a
+useful training example. One file for the project, so a
 bulk change is one atomic write; an image without an entry is in the first
 stage. Every change goes into the event log, with who made it.
 
+Image flags (<project>/image_flags.json): what is wrong with an image, any
+number of motion_blur, out_of_focus, occluded, no_object, not_qualified and
+other - with a note saying what "other" is. Saved with the image, like its
+stage, and logged.
+
+Comments can be a point, a box drawn on the image (kept with the comments,
+never in the annotation file), or attached to a box of yours, a sam3 box or
+an exemplar - stored with that box's position, so it follows the box.
+
 It replaces the older flags/ folder (one file per image, 0 or 1): the first
-time a project is opened, each flag 1 becomes the first done stage. flags/ is
+time a project is opened, each flag 1 becomes the last stage. flags/ is
 left as it was, and no longer read after that.
 
 Run:
@@ -113,6 +123,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import io
 import json
 import os
@@ -172,7 +183,7 @@ EVENT_TYPES = frozenset({
     "box.draw", "box.edit", "box.delete",
     "pred.approve", "pred.adjust", "pred.reject",
     "exemplar.pick", "exemplar.drop",
-    "box.class", "box.paste", "image.stage",
+    "box.class", "box.paste", "image.stage", "image.flags",
     "comment.add", "comment.edit", "comment.delete", "class.rename",
     "history.undo", "history.redo",
 })
@@ -340,6 +351,18 @@ class Annotation(BaseModel):
     boxes: list[Box]
     # The image's stage, when it changed; None leaves it as it is.
     stage: str | None = None
+    # Its flags and the note for "other"; None leaves them as they are.
+    flags: list[str] | None = None
+    flag_note: str | None = Field(default=None, max_length=500)
+
+    @field_validator("flags")
+    @classmethod
+    def _known_flags(cls, flags: list[str] | None) -> list[str] | None:
+        if flags is not None:
+            unknown = [f for f in flags if f not in IMAGE_FLAGS]
+            if unknown:
+                raise ValueError(f"unknown image flags {unknown}; known: {list(IMAGE_FLAGS)}")
+        return flags
 
     @field_validator("boxes")
     @classmethod
@@ -598,8 +621,8 @@ def image_stages(project: Project) -> dict[str, dict]:
             except (OSError, ValueError) as exc:
                 raise HTTPException(500, f"{path.name} could not be read: {exc}") from exc
         else:
-            done = next((st["id"] for st in stage_defs(project) if st["done"]), None)
-            if done and project.flags_dir.is_dir():
+            done = stage_defs(project)[-1]["id"]       # the last stage: signed off
+            if project.flags_dir.is_dir():
                 by_stem = {Path(n).stem: n for n in project.image_names()}
                 for f in project.flags_dir.glob("*.txt"):
                     try:
@@ -612,6 +635,57 @@ def image_stages(project: Project) -> dict[str, dict]:
             _write_stages(path, entries)
         _stage_cache[key] = entries
         return entries
+
+
+IMAGE_FLAGS = ("motion_blur", "out_of_focus", "occluded", "no_object", "not_qualified", "other")
+_flag_cache: dict[str, dict[str, dict]] = {}   # image_flags.json path -> {image: {flags, note, t, by}}
+_flag_lock = threading.Lock()
+
+
+def image_flags_path(project: Project) -> Path:
+    return project.annotations_dir.parent / "image_flags.json"
+
+
+def image_flag_entries(project: Project) -> dict[str, dict]:
+    path = image_flags_path(project)
+    with _flag_lock:
+        if str(path) not in _flag_cache:
+            entries: dict[str, dict] = {}
+            if path.is_file():
+                try:
+                    entries = json.loads(path.read_text(encoding="utf-8")).get("images") or {}
+                except (OSError, ValueError) as exc:
+                    raise HTTPException(500, f"{path.name} could not be read: {exc}") from exc
+            _flag_cache[str(path)] = entries
+        return _flag_cache[str(path)]
+
+
+def flags_of(entries: dict[str, dict], name: str) -> tuple[list[str], str]:
+    e = entries.get(name) or {}
+    return [f for f in e.get("flags", []) if f in IMAGE_FLAGS], e.get("note", "")
+
+
+def set_image_flags(project: Project, name: str, flags: list[str], note: str) -> None:
+    """Set an image's flags (in the fixed order) and the note for "other", and
+    log the change. An image with no flags left has no entry."""
+    flags = [f for f in IMAGE_FLAGS if f in set(flags)]
+    note = note.strip() if "other" in flags else ""
+    entries = image_flag_entries(project)
+    before = flags_of(entries, name)
+    if before == (flags, note):
+        return
+    with _flag_lock:
+        if flags:
+            entries[name] = {"flags": flags, "note": note, "t": now(), "by": ACTOR}
+        else:
+            entries.pop(name, None)
+        path = image_flags_path(project)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_text(json.dumps({"version": 1, "images": entries}, indent=0,
+                                  ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        tmp.replace(path)
+    log_server_event(project, "image.flags", name,
+                     {"from": before[0], "to": flags, "note": note})
 
 
 def stage_of(entries: dict[str, dict], name: str, defs: list[dict]) -> str:
@@ -1033,7 +1107,10 @@ class StageDef(BaseModel):
     id: str
     name: str = Field(min_length=1, max_length=40)
     color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
-    done: bool = False                   # counts as finished: progress, the ✓
+    # What to do in this stage, shown to whoever works on an image in it.
+    instructions: str = Field(default="", max_length=4000)
+    # Read from older files and ignored: the last stage is the finished one.
+    done: bool = False
 
     @field_validator("id")
     @classmethod
@@ -1301,6 +1378,7 @@ def list_projects(cfg: CfgDep) -> dict:
             "name": name,
             "runs": runs,
             "images": len(names),
+            "boxes": total_boxes(p),
             "stages": defs,
             "stage_counts": counts,
             "covers": spread(names, 3),
@@ -1310,6 +1388,31 @@ def list_projects(cfg: CfgDep) -> dict:
         "default_project": cfg.paths.dataset,
         "root": str(cfg.paths.root),
     }
+
+
+_box_totals: dict[str, tuple[float, int]] = {}
+
+
+def total_boxes(project: Project) -> int:
+    """Boxes in all of a project's annotation files, for the projects page.
+    Every save replaces its file through a rename, which touches the folder's
+    mtime - so the count is redone only when something was saved."""
+    d = project.annotations_dir
+    try:
+        mtime = d.stat().st_mtime
+    except OSError:
+        return 0
+    hit = _box_totals.get(str(d))
+    if hit and hit[0] == mtime:
+        return hit[1]
+    n = 0
+    for f in d.glob("*.txt"):
+        try:
+            n += sum(1 for ln in f.read_text().splitlines() if ln.strip())
+        except OSError:
+            continue
+    _box_totals[str(d)] = (mtime, n)
+    return n
 
 
 def spread(names: list[str], k: int) -> list[str]:
@@ -1394,20 +1497,85 @@ def delete_run(project: ProjectDep, run: str, confirm: str = "") -> dict:
 
 
 @app.get("/api/images")
-def list_images(project: ProjectDep) -> list[dict]:
-    """Every image with just enough state for the grid and the image strip.
+def list_images(project: ProjectDep, run: str | None = None, min_score: float = 0.0) -> list[dict]:
+    """Every image with the state the grid, the image strip and the grid's
+    content filter and sort need: file size, boxes in total and per class, the stage, open
+    comments - and, for `run`, its SAM 3 boxes scoring at least `min_score`
+    (what the run proposed, before any approval or rejection) and its
+    exemplars.
 
-    This walks two files per image. It is the first thing that will need an
-    index when a project gets large - see the note at the bottom of the file.
+    This walks every annotation file, and the run's prediction files. It is
+    the first thing that will need an index when a project gets large - see
+    the note at the bottom of the file.
     """
-    out = []
     entries, defs = image_stages(project), stage_defs(project)
+    flag_entries = image_flag_entries(project)
+    r = project.run(run) if run else None
+
+    preds: dict[str, int] = {}
+    if r is not None and r.predictions_dir.is_dir():
+        for f in r.predictions_dir.glob("*.txt"):
+            n = 0
+            try:
+                for line in f.read_text().splitlines():
+                    parts = line.split()
+                    if len(parts) < 5:
+                        continue
+                    try:
+                        score = float(parts[7]) if len(parts) >= 8 else 1.0
+                    except ValueError:
+                        score = 1.0
+                    if score >= min_score:
+                        n += 1
+            except OSError:
+                continue
+            preds[f.stem] = n
+
+    exems: dict[str, int] = {}
+    if r is not None:
+        try:
+            for e in read_exemplar_set(project, r).exemplars:
+                exems[e.image] = exems.get(e.image, 0) + 1
+        except (HTTPException, ValueError, OSError) as exc:
+            print(f"  exemplar counts unavailable for {r.name}: {exc}")
+
+    open_comments: dict[str, int] = {}
+    cdir = project.annotations_dir.parent / "comments"
+    if cdir.is_dir():
+        for f in cdir.glob("*.json"):
+            try:
+                items = json.loads(f.read_text(encoding="utf-8")).get("comments", [])
+            except (OSError, ValueError):
+                continue
+            n = sum(1 for c in items if isinstance(c, dict) and not c.get("resolved"))
+            if n:
+                open_comments[f.stem] = n
+
+    out = []
     for name in project.image_names():
+        stem = Path(name).stem
         path = annotation_path(project, name)
-        n = 0
+        n, classes = 0, {}
         if path.is_file():
-            n = len([ln for ln in path.read_text().splitlines() if ln.strip()])
-        out.append({"name": name, "boxes": n, "stage": stage_of(entries, name, defs)})
+            for line in path.read_text().splitlines():
+                head = line.split(maxsplit=1)
+                if not head:
+                    continue
+                n += 1
+                cls = class_token(head[0])
+                if cls is not None:
+                    classes[cls] = classes.get(cls, 0) + 1
+        try:
+            size = (project.image_dir / name).stat().st_size
+        except OSError:
+            size = 0
+        out.append({
+            "name": name, "bytes": size, "boxes": n, "classes": classes,
+            "stage": stage_of(entries, name, defs),
+            "flags": flags_of(flag_entries, name)[0], "flag_note": flags_of(flag_entries, name)[1],
+            "preds": preds.get(stem, 0), "exems": exems.get(name, 0),
+            "comments": open_comments.get(stem, 0),
+        })
     return out
 
 
@@ -1507,6 +1675,8 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "predictions": [b.model_dump() for b in read_predictions(project, run, name)],
         "exemplars": exemplar_boxes(project, run, name),
         "stage": stage_of(image_stages(project), name, stage_defs(project)),
+        "flags": flags_of(image_flag_entries(project), name)[0],
+        "flag_note": flags_of(image_flag_entries(project), name)[1],
         "active_ms": event_log(project).active_ms(name),
         "coverage": read_coverage(project, name),
         "comments": read_comments(project, name),
@@ -1524,6 +1694,8 @@ def put_annotation(project: ProjectDep, name: str, annotation: Annotation) -> di
         defs = stage_defs(project)
         if stage_of(image_stages(project), name, defs) != annotation.stage:
             set_stages(project, [name], annotation.stage)
+    if annotation.flags is not None:
+        set_image_flags(project, name, annotation.flags, annotation.flag_note or "")
     note_classes(project, annotation.boxes)
     return {"saved": len(annotation.boxes)}
 
@@ -1728,14 +1900,39 @@ def rename_class(project: ProjectDep, req: ClassRename) -> dict:
 # --------------------------------------------------------------------------
 
 class CommentIn(BaseModel):
-    x: float = Field(ge=0, le=1)         # normalised position on the image
+    x: float = Field(ge=0, le=1)         # normalised position of its pin
     y: float = Field(ge=0, le=1)
     text: str = Field(min_length=1, max_length=4000)
+    # point: at x, y. region: a box drawn for the comment, never an annotation.
+    # box / pred / exem: on a box of yours, a sam3 box or an exemplar.
+    kind: Literal["point", "region", "box", "pred", "exem"] = "point"
+    box: list[float] | None = None       # normalised x1, y1, x2, y2
+    cls: str | None = Field(default=None, max_length=64)   # the class of the box commented on
+
+    @model_validator(mode="after")
+    def _box_for_kind(self) -> "CommentIn":
+        if self.kind == "point":
+            self.box = None
+            return self
+        b = self.box
+        if not b or len(b) != 4 or not all(0 <= v <= 1 for v in b) or b[0] >= b[2] or b[1] >= b[3]:
+            raise ValueError("a comment on an area or a box needs box: [x1, y1, x2, y2], normalised")
+        return self
 
 
 class CommentPatch(BaseModel):
     text: str | None = Field(default=None, min_length=1, max_length=4000)
     resolved: bool | None = None
+    # A comment on a box follows the box: its new place, normalised.
+    box: list[float] | None = None
+
+    @field_validator("box")
+    @classmethod
+    def _box(cls, b: list[float] | None) -> list[float] | None:
+        if b is not None and (len(b) != 4 or not all(0 <= v <= 1 for v in b)
+                              or b[0] >= b[2] or b[1] >= b[3]):
+            raise ValueError("box is [x1, y1, x2, y2], normalised")
+        return b
 
 
 _comments_lock = threading.Lock()
@@ -1781,12 +1978,14 @@ def log_server_event(project: Project, type_: str, image: str | None, data: dict
 def add_comment(project: ProjectDep, name: str, c: CommentIn) -> dict:
     image_path(project, name)
     item = {"id": uuid.uuid4().hex[:12], "x": c.x, "y": c.y, "text": c.text,
+            "kind": c.kind, "box": c.box, "cls": c.cls,
             "author": ACTOR, "created": now(), "updated": None, "resolved": False}
     with _comments_lock:
         comments = read_comments(project, name)
         comments.append(item)
         write_comments(project, name, comments)
     log_server_event(project, "comment.add", name, {"id": item["id"], "x": c.x, "y": c.y,
+                                                    "kind": c.kind, "box": c.box,
                                                     "text": c.text})
     return item
 
@@ -1803,7 +2002,11 @@ def edit_comment(project: ProjectDep, name: str, cid: str, patch: CommentPatch) 
             item["text"] = patch.text
         if patch.resolved is not None:
             item["resolved"] = patch.resolved
-        item["updated"] = now()
+        if patch.box is not None:
+            item["box"] = patch.box
+            item["x"], item["y"] = patch.box[2], patch.box[1]    # the pin: top right
+        if patch.text is not None or patch.resolved is not None:
+            item["updated"] = now()
         write_comments(project, name, comments)
     log_server_event(project, "comment.edit", name,
                      {"id": cid, **patch.model_dump(exclude_none=True)})
@@ -1835,6 +2038,82 @@ def get_exemplar_set(project: ProjectDep, run: RunDep) -> dict:
         "image_dir": s.image_dir,
         "path": str(run.exemplar_manifest),
     }
+
+
+@app.get("/api/run-exemplars")
+def get_run_exemplars(project: ProjectDep, run: RunDep) -> dict:
+    """The run's exemplars, for the header's exemplar window: every one picked
+    for it, in pick order, and - when the run has been made - which it used
+    (from run_manifest.json; a run that sampled gt/ boxes used those)."""
+    if run is None:
+        return {"run": None, "picked": [], "last_run": None}
+    picked = [e.model_dump() for e in read_exemplar_set(project, run).exemplars]
+    last = None
+    try:
+        m = json.loads(run.manifest_path.read_text(encoding="utf-8"))
+        when = datetime.fromtimestamp(run.manifest_path.stat().st_mtime, timezone.utc)
+        last = {
+            "when": when.isoformat(timespec="seconds"),
+            "source": m.get("exemplar_source"),
+            "class_name": m.get("class_name"),
+            "used": [{"image": e.get("source"), "cx": b[0], "cy": b[1], "w": b[2], "h": b[3]}
+                     for e in m.get("exemplars", []) if len(b := e.get("box_cxcywh_norm") or []) == 4],
+        }
+    except (OSError, ValueError):
+        pass                                 # not run yet, or a manifest it cannot read
+    return {"run": run.name, "picked": picked, "last_run": last}
+
+
+CROP_SIZES = (96, 160, 320)
+
+
+@app.get("/api/crop/{name}")
+def get_crop(
+    project: ProjectDep,
+    name: str,
+    cx: Annotated[float, Query(ge=0, le=1)],
+    cy: Annotated[float, Query(ge=0, le=1)],
+    w: Annotated[float, Query(gt=0, le=1)],
+    h: Annotated[float, Query(gt=0, le=1)],
+    pad: Annotated[float, Query(ge=0, le=2)] = 0.25,
+    size: Annotated[int, Query(ge=16, le=1024)] = 160,
+) -> Response:
+    """A box cut out of its image - with `pad` of its size around it, as the
+    SAM 3 script pastes exemplars - scaled to `size` on its long edge. For
+    showing exemplars; cached next to the thumbnails."""
+    src = image_path(project, name)
+    size = next((v for v in CROP_SIZES if v >= size), CROP_SIZES[-1])
+    key = f"{cx:.5f},{cy:.5f},{w:.5f},{h:.5f},{pad:.3f},{size}"
+    digest = hashlib.sha1(key.encode()).hexdigest()[:16]
+    cached = project.dir / ".thumbs" / "crops" / f"{Path(name).stem}-{digest}.jpg"
+    try:
+        if cached.is_file() and cached.stat().st_mtime >= src.stat().st_mtime:
+            return FileResponse(cached, media_type="image/jpeg", headers=THUMB_HEADERS)
+    except OSError:
+        pass
+    try:
+        with Image.open(src) as raw:
+            # Upright, as the editor shows it and the boxes were drawn on it.
+            im = ImageOps.exif_transpose(raw) or raw
+            W, H = im.size
+            px, py = w * pad * W, h * pad * H
+            box = (max(0, round((cx - w / 2) * W - px)), max(0, round((cy - h / 2) * H - py)),
+                   min(W, round((cx + w / 2) * W + px)), min(H, round((cy + h / 2) * H + py)))
+            tile = im.convert("RGB").crop(box)
+        tile.thumbnail((size, size), Image.Resampling.LANCZOS)
+        buf = io.BytesIO()
+        tile.save(buf, "JPEG", quality=88)
+        data = buf.getvalue()
+    except (OSError, ValueError, Image.DecompressionBombError) as exc:
+        raise HTTPException(415, f"cannot decode {name}: {exc}") from exc
+    try:
+        cached.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cached.with_name(f".{cached.name}.{os.getpid()}.{threading.get_ident()}.tmp")
+        tmp.write_bytes(data)
+        tmp.replace(cached)
+    except OSError:
+        pass
+    return Response(data, media_type="image/jpeg", headers=THUMB_HEADERS)
 
 
 @app.post("/api/exemplar/{name}")

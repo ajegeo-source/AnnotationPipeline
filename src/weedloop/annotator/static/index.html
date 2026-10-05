@@ -33,6 +33,9 @@
   .view { height: 100%; display: grid; grid-template-rows: auto 1fr; min-height: 0; }
   .view[hidden] { display: none !important; }
   #datasetView { grid-template-rows: auto auto 1fr; }
+  #projectsView { grid-template-rows: auto auto 1fr; }
+  #projSearch { width: 240px; }
+  .sortctl { display: inline-flex; align-items: center; gap: 6px; color: var(--dim); font-size: 12px; }
   #editorView  { grid-template-rows: auto 1fr auto; }
   .scroll { overflow: auto; min-height: 0; }
 
@@ -408,6 +411,48 @@
   }
   .pin.resolved { background: #8b939e; opacity: .75; }
   .pin.open, .pin:hover { background: var(--exem); }
+  /* A comment box's label sits on its top left corner, the box under it. */
+  .pin.region { border-radius: 2px 2px 2px 0; }
+  .stage rect.cbox {
+    fill: rgba(245, 245, 244, .06); stroke: #f5f5f4; stroke-width: 1.5px; stroke-dasharray: 2 4;
+    stroke-linecap: round;
+  }
+  .stage rect.cbox.resolved { stroke: #8b939e; fill: none; }
+  .stage rect.cbox.open { stroke: var(--exem); }
+  .stage rect.cbox.draft { stroke-dasharray: 6 4; }
+  #commentBtn.on { color: #0d1114; background: #f5f5f4; border-color: #f5f5f4; }
+  /* Image flags: neutral - notes, not categories. */
+  .flagchip { color: var(--dim); }
+  .flagchip.on { color: var(--text); border-color: #f5f5f4; }
+  .flagchip.on span::before { content: "\2691  "; }
+  .flagitem .k { color: var(--text); }
+  .flagnote { display: block; width: calc(100% - 12px); margin: 6px 6px 4px; padding: 4px 7px; font: 12px var(--mono); }
+  .tile .fl {
+    position: absolute; left: 6px; bottom: 6px; padding: 1px 6px; border-radius: 2px;
+    font: 11px/1.5 var(--mono); color: #0d1114; background: #f5f5f4;
+  }
+  .fp-flag { padding-left: 8px; }
+  /* ------------------------------------------------ the run's exemplars */
+  button.exemcount { background: none; border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
+  button.exemcount:hover, button.exemcount[aria-expanded="true"] { text-decoration: underline; }
+  .exemcount:empty { display: none; }
+  .filterpanel.exempanel { width: 464px; }
+  .ex-head { margin: 12px 0 6px; color: var(--dim); font-size: 12px; }
+  .ex-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 8px; }
+  .ex-card {
+    position: relative; display: flex; flex-direction: column; gap: 4px; padding: 5px;
+    background: var(--bg); border: 1px solid var(--line); border-radius: 2px;
+    color: var(--text); cursor: pointer; text-align: left;
+  }
+  .ex-card:hover, .ex-card:focus-visible { border-color: var(--exem); outline: none; }
+  .ex-card img { width: 100%; height: 112px; object-fit: contain; background: #0d0f12; border-radius: 1px; }
+  .ex-cap { font: 11px/1.3 var(--mono); color: var(--dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ex-badge {
+    position: absolute; top: 9px; left: 9px; padding: 0 5px; border-radius: 2px;
+    font: 600 10px/1.6 var(--mono); color: #0d1114; background: var(--exem);
+  }
+  .ex-card.unused .ex-badge { color: var(--text); background: rgba(13, 15, 18, .8); border: 1px solid var(--line); }
+  .ex-card.unused img { opacity: .6; }
   .pin:focus-visible { outline: 2px solid var(--human); outline-offset: 2px; }
   .cpop {
     position: absolute; z-index: 3; width: 280px; padding: 9px 10px;
@@ -501,6 +546,36 @@
   .stats .p b { color: var(--started); font-weight: 500; }
   .stats .t b { color: var(--text); font-weight: 500; }
   .stats b { font-weight: 500; }
+  /* ------------------------------------------------ the grid's content filter */
+  #filterBtn.on { color: #0d1114; background: #8ecbff; border-color: #8ecbff; }
+  .filterpanel {
+    position: fixed; z-index: 20; width: 360px; max-height: 70vh; overflow: auto; padding: 12px 14px;
+    background: var(--panel); border: 1px solid var(--line); border-radius: 3px;
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .5); font-size: 12px;
+  }
+  .filterpanel[hidden] { display: none; }
+  .fp-title { font-weight: 600; margin-bottom: 8px; }
+  .fp-row { display: flex; align-items: center; gap: 7px; margin: 5px 0; }
+  .fp-label { flex: 1; color: var(--text); }
+  .fp-sep { color: var(--dim); }
+  .fp-num { width: 58px; padding: 3px 6px; font: 12px var(--mono); }
+  .fp-note { margin: 6px 0 8px; color: var(--dim); line-height: 1.4; }
+  .fp-classhead { margin-top: 12px; }
+  .fp-classes { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+  .fp-class {
+    display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px 3px 6px;
+    border: 1px solid var(--line); border-radius: 12px; background: var(--bg);
+    color: var(--dim); font: 12px/1.5 var(--mono); cursor: pointer;
+  }
+  .fp-class i { width: 9px; height: 9px; border-radius: 2px; }
+  .fp-class .fp-mark { width: 10px; text-align: center; font-weight: 700; }
+  .fp-class.has { color: var(--text); border-color: #4bd6a4; }
+  .fp-class.has .fp-mark { color: #4bd6a4; }
+  .fp-class.not { color: var(--text); border-color: #ff6b6b; text-decoration: line-through; }
+  .fp-class.not .fp-mark { color: #ff6b6b; }
+  .fp-foot { display: flex; align-items: center; justify-content: space-between; margin-top: 12px;
+             padding-top: 10px; border-top: 1px solid var(--line); }
+  .fp-count { color: #8ecbff; font-family: var(--mono); }
   /* A stage in the Workflow tab: number, colour, name, done, count - one line. */
   .keyrow.stagerow { grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; }
   .stagerow .chips { display: flex; flex-wrap: nowrap; justify-content: flex-start; align-items: center; gap: 12px; }
@@ -593,6 +668,16 @@
   .gridsel .selcount { color: #8ecbff; font: 12px var(--mono); min-width: 0; }
   .gridsel .picker:disabled { opacity: .45; }
   .stagechip span { white-space: nowrap; }
+  .stagechip.has-notes span::after { content: " \270e"; color: var(--dim); }
+  .notebtn.has { color: var(--text); border-color: var(--dim); }
+  .notebtn.on { color: #0d1114; background: #8ecbff; border-color: #8ecbff; }
+  .stagenotes { margin: 2px 0 12px 34px; }
+  .stagenotes textarea {
+    width: 100%; box-sizing: border-box; resize: vertical; min-height: 70px; padding: 7px 9px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 2px;
+    font: 12px/1.5 inherit;
+  }
+  .stagenotes textarea:focus { outline: none; border-color: #8ecbff; }
   .empty { color: var(--dim); padding: 40px 20px; text-align: center; }
 </style>
 </head>
@@ -606,6 +691,12 @@
     <span class="spacer"></span>
     <span class="name status"></span>
   </header>
+  <div class="toolbar">
+    <input id="projSearch" class="field" type="search" placeholder="Filter projects by name"
+           autocomplete="off" spellcheck="false" aria-label="Filter projects by name">
+    <label class="sortctl">sort <select id="projSort" class="picker" aria-label="Sort projects by"></select></label>
+    <button class="badge" id="projSortDir" type="button" aria-label="Sort direction"></button>
+  </div>
   <div class="scroll">
     <div class="cards" id="projectCards"></div>
   </div>
@@ -632,6 +723,10 @@
       <select id="bulkStage" class="picker" aria-label="Move the selected images to a stage" disabled></select>
     </span>
     <span class="spacer"></span>
+    <label class="sortctl">sort <select id="sortSel" class="picker" aria-label="Sort images by"></select></label>
+    <button class="badge" id="sortDir" type="button" aria-label="Sort direction"></button>
+    <button class="badge" id="filterBtn" type="button" aria-haspopup="dialog" aria-expanded="false"
+            title="Filter images by what is in them: boxes, classes, sam3 boxes, exemplars, comments">filter</button>
     <input id="search" class="field" type="search" placeholder="Filter by file name  ( / )"
            autocomplete="off" spellcheck="false" aria-label="Filter by file name">
     <label class="sizer">Size
@@ -661,8 +756,10 @@
         title="active time on this image: this visit / all visits. Pauses after a minute without input, or while the tab is hidden."></span>
   <span class="counter" id="boxcount"></span>
   <span class="predcount" id="predcount"></span>
-  <span class="exemcount" id="exemcount"></span>
+  <button class="exemcount" id="exemcount" type="button" aria-haspopup="dialog" aria-expanded="false"
+          title="Show the exemplars of this run, and which the last run used"></button>
   <span class="spacer"></span>
+  <button class="badge" id="commentBtn" type="button" title="Comment: on the selected box, or draw a comment box; a click gives a point (c)">comment</button>
   <button class="badge" id="areaBtn" type="button" aria-pressed="false" title="Select the boxes inside a rectangle you drag (v)">select area</button>
   <button class="classchip" id="classChip" type="button" aria-haspopup="menu" aria-expanded="false"><i id="classSwatch"></i><span id="classChipName"></span></button>
   <button class="badge" id="mode"
@@ -674,6 +771,7 @@
     <button class="badge approve" id="approve"
             title="copy every shown sam3 box into your annotations">approve</button>
   </span>
+  <button class="classchip flagchip" id="flagChip" type="button" aria-haspopup="menu" aria-expanded="false"><span id="flagChipName">no flags</span></button>
   <button class="classchip stagechip" id="stageChip" type="button" aria-haspopup="menu" aria-expanded="false"><i id="stageSwatch"></i><span id="stageChipName"></span></button>
   <button class="badge open-keys" type="button" title="mouse speeds and shortcuts (k)">settings</button>
 </header>
@@ -728,6 +826,9 @@
 
 <div class="classmenu" id="classMenu" role="menu" hidden></div>
 <div class="classmenu" id="stageMenu" role="menu" hidden></div>
+<div class="classmenu" id="flagMenu" role="menu" hidden></div>
+<div class="filterpanel exempanel" id="exemPanel" role="dialog" aria-label="The run's exemplars" hidden></div>
+<div class="filterpanel" id="filterPanel" role="dialog" aria-label="Filter images by content" hidden></div>
 
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
   <div class="keys-head">
@@ -826,6 +927,7 @@ const el = {
   thresh: document.getElementById("thresh"),
   applyThresh: document.getElementById("applyThresh"),
   exemcount: document.getElementById("exemcount"),
+  exemPanel: document.getElementById("exemPanel"),
   mode: document.getElementById("mode"),
   approve: document.getElementById("approve"),
   viewport: document.getElementById("viewport"),
@@ -878,10 +980,21 @@ const el = {
   scanPill: document.getElementById("scanPill"),
   classChip: document.getElementById("classChip"),
   stageChip: document.getElementById("stageChip"),
+  flagChip: document.getElementById("flagChip"),
+  flagChipName: document.getElementById("flagChipName"),
+  flagMenu: document.getElementById("flagMenu"),
+  commentBtn: document.getElementById("commentBtn"),
   stageSwatch: document.getElementById("stageSwatch"),
   stageChipName: document.getElementById("stageChipName"),
   stageMenu: document.getElementById("stageMenu"),
   selAllShown: document.getElementById("selAllShown"),
+  filterBtn: document.getElementById("filterBtn"),
+  sortSel: document.getElementById("sortSel"),
+  sortDir: document.getElementById("sortDir"),
+  projSearch: document.getElementById("projSearch"),
+  projSort: document.getElementById("projSort"),
+  projSortDir: document.getElementById("projSortDir"),
+  filterPanel: document.getElementById("filterPanel"),
   selNone: document.getElementById("selNone"),
   selCount: document.getElementById("selCount"),
   bulkStage: document.getElementById("bulkStage"),
@@ -1079,7 +1192,7 @@ let drag = null;    // an existing box being moved or resized
     or start a new box. */
 let drawHintShown = false;
 function pointerEditStart(e) {
-  if (commentPlacing) { placeComment(toImage(e)); return; }
+  if (commentPlacing && !(draft && draft.open)) { startCommentDraft(e, toImage(e)); return; }
   if (marqueeArmed) { startMarquee(e, toImage(e)); return; }
   if (peeking) return;
   if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
@@ -1188,6 +1301,7 @@ function endDrag() {
     if (b.x2 - b.x1 < MIN_BOX || b.y2 - b.y1 < MIN_BOX) Object.assign(b, s);
     const changed = ["x1", "y1", "x2", "y2"].some((k) => Math.abs(b[k] - s[k]) > 0.5);
     if (changed) {
+      commentsFollow(drag.kind, s, { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2 });
       const kind = drag.mode === "move" ? "move" : "resize";
       if (drag.kind === "pred") {
         // Nothing is written: this only decides which token the box gets if
@@ -1214,6 +1328,7 @@ function endDrag() {
     that can be refused. If the server says no, nothing has been created
     anywhere and the drag simply evaporates. */
 async function endDraft() {
+  if (draft.comment) { finishCommentDraft(); return; }   // a comment's box, not an annotation
   const x1 = Math.min(draft.x0, draft.x1), x2 = Math.max(draft.x0, draft.x1);
   const y1 = Math.min(draft.y0, draft.y1), y2 = Math.max(draft.y0, draft.y1);
   const picking = mode === "exemplar";
@@ -1355,7 +1470,7 @@ el.approve.addEventListener("click", () => approveShown());
 
 function showSet() {
   if (!exemSet || !exemSet.name) { el.exemcount.textContent = ""; return; }
-  el.exemcount.textContent = `${exemSet.count} in ${exemSet.name}`;
+  el.exemcount.textContent = `${exemSet.count} in ${exemSet.name} \u25be`;
 }
 
 async function postExemplar(box) {
@@ -1465,7 +1580,10 @@ function render() {
   exems.forEach((b, i) => {
     el.svg.appendChild(paint(rect(b, "exem"), exemStyle, { selected: isSel("exem", i) }));
   });
-  if (draft) {
+  renderCommentBoxes();
+  if (draft && draft.comment) {
+    el.svg.appendChild(rect({ x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 }, "cbox draft"));
+  } else if (draft) {
     // Drawn in the style of what it will become, dashed while it is a draft.
     el.svg.appendChild(paint(
       rect({ x1: draft.x0, y1: draft.y0, x2: draft.x1, y2: draft.y1 }, "draft"),
@@ -1483,6 +1601,8 @@ function render() {
 function renderCounts(shown) {
   scheduleMinimap();                 // the dots follow the boxes
   schedulePins();
+  noteImageContents();               // the grid's filter sees edits at once
+  renderFlagChip();
   scheduleStrip();                   // and the strip's status bars
   const derived = boxes.filter(fromSam3).length;
   el.boxcount.textContent =
@@ -1514,7 +1634,7 @@ async function save() {
     r = await fetch(q(`api/annotation/${encodeURIComponent(name)}`), {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boxes, stage: stageOf(imageStage).id }),
+      body: JSON.stringify({ boxes, stage: stageOf(imageStage).id, flags: imageFlags, flag_note: flagNote }),
     });
   } catch (err) {
     dirty = true;
@@ -1528,6 +1648,8 @@ async function save() {
   }
   images[idx].boxes = boxes.length;
   images[idx].stage = stageOf(imageStage).id;
+  images[idx].flags = [...imageFlags];
+  images[idx].flag_note = flagNote;
   scheduleStrip();                   // its status bar follows the save
   return true;
 }
@@ -1552,6 +1674,9 @@ async function load(i) {
 
   exems = (data.exemplars || []).map(normalise);
   imageStage = data.stage;
+  imageFlags = data.flags || [];
+  flagNote = data.flag_note || "";
+  closeFlagMenu();
   const before = seenClasses.size;
   for (const b of boxes) seenClasses.add(b.cls);   // not predictions: "0" is not a class here
   comments = data.comments || [];
@@ -1590,7 +1715,7 @@ async function go(i) {
   // replaceState, not a new history entry: a/d through 300 images should not
   // take 300 presses of Back to get to the grid.
   history.replaceState(null, "", hashFor(project, images[i].name));
-  load(i);
+  return load(i);                    // resolves once the image is there
 }
 
 // ---------------------------------------------------------------- event log
@@ -1782,13 +1907,16 @@ function hist() {
 
 const clone = (list) => list.map((b) => ({ ...b }));
 const snapshot = () =>
-  ({ boxes: clone(boxes), preds: clone(preds), exems: clone(exems), stage: imageStage });
+  ({ boxes: clone(boxes), preds: clone(preds), exems: clone(exems), stage: imageStage,
+     flags: [...imageFlags], flagNote });
 
 function restore(s) {
   boxes = clone(s.boxes);
   preds = clone(s.preds);
   exems = clone(s.exems);
   imageStage = s.stage;
+  imageFlags = [...(s.flags || [])];
+  flagNote = s.flagNote || "";
   sel = null;
   multi = [];
 }
@@ -1799,6 +1927,7 @@ function record(label, before, events, extra = {}) {
   const h = hist();
   const after = snapshot();
   const saves = before.stage !== after.stage
+    || String(before.flags) !== String(after.flags) || before.flagNote !== after.flagNote
     || JSON.stringify(before.boxes) !== JSON.stringify(after.boxes);
   h.undo.push({ label, before, after, saves, run,
                 events: events.filter(Boolean), ...extra });
@@ -1936,7 +2065,7 @@ const COMMANDS = {
                          keys: ["Ctrl+v"], run: () => pasteBoxes(false) },
   "edit.pasteHere":    { screen: "editor", group: "Edit", label: "Paste at the pointer",
                          keys: ["Ctrl+Shift+v"], run: () => pasteBoxes(true) },
-  "comment.add":       { screen: "editor", group: "Edit", label: "Comment: then click where it goes",
+  "comment.add":       { screen: "editor", group: "Edit", label: "Comment: on the selected box, or draw a comment box (click: a point)",
                          keys: ["c"], run: () => startCommentPlacement() },
   "image.stageNext":   { screen: "editor", group: "Edit", label: "Move the image to the next stage",
                          keys: ["f"], run: () => stageStep(1) },
@@ -1971,9 +2100,9 @@ const COMMANDS = {
                          kind: "hold", keys: [], scanSafe: true, run: (down) => peek(down) },
   "scan.toggle":       { screen: "editor", group: "Scanning", label: "Scan: start, go on from here, or stop",
                          keys: ["s"], scanSafe: true, run: () => toggleScan() },
-  "scan.faster":       { screen: "editor", group: "Scanning", label: "Scan faster (while scanning)",
+  "scan.faster":       { screen: "editor", group: "Scanning", label: "Next scan speed, round and round (while scanning)",
                          keys: ["."], repeat: true, scanSafe: true, run: () => scanSpeed(1) },
-  "scan.slower":       { screen: "editor", group: "Scanning", label: "Scan slower (while scanning)",
+  "scan.slower":       { screen: "editor", group: "Scanning", label: "Previous scan speed, round and round (while scanning)",
                          keys: [","], repeat: true, scanSafe: true, run: () => scanSpeed(-1) },
   "view.minimap":      { screen: "editor", group: "View", label: "Show or hide the minimap",
                          keys: ["m"], scanSafe: true, run: () => toggleMinimap() },
@@ -1990,6 +2119,15 @@ for (let n = 1; n <= 9; n++) {
   COMMANDS[`class.pick${n}`] = {
     screen: "editor", group: "Classes", label: `Class ${n} of the list`,
     keys: [String(n)], run: () => pickClass(n - 1),
+  };
+}
+// One toggle per image flag: no keys by default, bind the ones you use.
+for (const [id, label] of [["motion_blur", "motion blur"], ["out_of_focus", "out of focus"],
+                           ["occluded", "occluded"], ["no_object", "no object"],
+                           ["not_qualified", "not qualified"], ["other", "other"]]) {
+  COMMANDS[`flag.${id}`] = {
+    screen: "editor", group: "Image flags", label: `Flag the image: ${label} (on or off)`,
+    keys: [], run: () => toggleFlag(id),
   };
 }
 COMMANDS["class.next"] = {
@@ -3144,9 +3282,9 @@ function saveProjectSettings() {
       });
       if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
       projectPrefsPath = (await r.json()).path || projectPrefsPath;
-      keyStatus(`Classes saved to ${projectPrefsPath}`);
+      keyStatus(`Project settings saved to ${projectPrefsPath}`);
     } catch (err) {
-      keyStatus(`Classes not saved (${err.message}). They work in this tab until you reload.`, true);
+      keyStatus(`Project settings not saved (${err.message}). They work in this tab until you reload.`, true);
     }
   });
 }
@@ -3906,8 +4044,10 @@ const minimapChangeCount = () =>
 //     which starts a new pass from the new view, in the direction it was
 //     going. Only moving the mouse interrupts nothing.
 //
-// Speed is one of a few fixed levels, set with . and , while a scan is on;
-// bars show the level for a moment after each change. The first and the last
+// Speed is one of a few fixed levels, stepped through with . (faster) and ,
+// (slower) while a scan is on - round and round: after the fastest comes the
+// slowest. Bars show the level for a moment after each press. A scan starts
+// at the level last used. The first and the last
 // view of the image are held for edge_s seconds.
 //
 // A running scan counts as activity for the timer and for coverage; with no
@@ -4271,10 +4411,12 @@ function hideScanLevel() {
 }
 
 let scanSaveTimer = 0;
-/** . and , - only while a scan is on; otherwise the keys do nothing. */
+/** . and , - only while a scan is on; otherwise the keys do nothing. They go
+    round: past the fastest is the slowest, and the other way. */
 function scanSpeed(dir) {
   if (!scan.on) return;
-  const j = clamp(speedLevel() + dir, 0, SCAN_LEVELS.length - 1);
+  const n = SCAN_LEVELS.length;
+  const j = (speedLevel() + dir + n) % n;
   prefs.scan.speed = SCAN_LEVELS[j].px;
   showScanLevel();
   clearTimeout(scanSaveTimer);
@@ -4331,7 +4473,8 @@ function scanSection() {
   sec.append(h("h3", "", "Scanning"),
     h("p", "keyhint", "s starts a scan from the view on screen, or from the first view when the "
       + "whole image is on screen. Annotating pauses it and it goes on by itself; moving the view "
-      + "holds it until s, which goes on from the new view. While scanning, . and , set the speed."));
+      + "holds it until s, which goes on from the new view. While scanning, . and , step through "
+      + "the speeds - round and round - and a scan starts at the one last used."));
 
   const row = (key, label, hint, min, max, step, fmt, toValue = (v) => v, fromValue = (v) => v) => {
     const changed = sc[key] !== SCAN_DEFAULTS[key];
@@ -4373,12 +4516,7 @@ function scanSection() {
     l.append(c, h("span", "", label));
     return l;
   };
-  const levelOf = (px) => SCAN_LEVELS.reduce((best, l, k) =>
-    Math.abs(l.px - px) < Math.abs(SCAN_LEVELS[best].px - px) ? k : best, 0);
   sec.append(
-    row("speed", "Speed", "The level a scan starts at; . and , change it while scanning.",
-        0, SCAN_LEVELS.length - 1, 1, (v) => SCAN_LEVELS[levelOf(v)].name,
-        (i) => SCAN_LEVELS[i].px, levelOf),
     row("edge_s", "Hold first and last view", "How long the scan stays on the image's first view "
         + "before it moves, and on its last before it ends. Also in the box beside the scan indicator.",
         0, 10, 0.5, (v) => `${v} s`),
@@ -4390,8 +4528,9 @@ function scanSection() {
   return sec;
 }
 
+// The speed is set with keys, not here, so it is not a "change from the defaults".
 const scanChangeCount = () =>
-  Object.keys(SCAN_DEFAULTS).filter((k) => prefs.scan[k] !== SCAN_DEFAULTS[k]).length;
+  Object.keys(SCAN_DEFAULTS).filter((k) => k !== "speed" && prefs.scan[k] !== SCAN_DEFAULTS[k]).length;
 
 // ---------------------------------------------------------------- image strip
 //
@@ -4835,10 +4974,15 @@ function pasteBoxes(atPointer) {
 
 // ---------------------------------------------------------------- comments
 //
-// A note pinned to a point on the image. c, then a click where it goes; a
-// click on a pin opens it to read, edit, resolve or delete. Saved on the
-// server at once (<project>/comments/), with author and time - comments are
-// not part of undo, like messages rather than edits.
+// Notes on an image, saved on the server at once (<project>/comments/) with
+// author and time - like messages rather than edits, so not part of undo.
+// c (or the comment button) makes one:
+//   with a box, sam3 box or exemplar selected - a comment on that box, its
+//     pin on the box's corner; it follows the box when the box is moved;
+//   otherwise - draw a box, as for an annotation: a comment box, dashed and
+//     labelled, that is never written to the annotation file. A click
+//     without dragging gives a comment on that point.
+// A click on a pin opens it to read, edit, resolve or delete.
 
 let comments = [];               // the image's, from the server
 let commentPlacing = false;
@@ -4847,28 +4991,114 @@ let pinFrame = 0;
 
 function startCommentPlacement() {
   if (view !== "editor" || !natW) return;
-  draft = null;
+  if (boxesHidden) { flash("Boxes hidden: h shows them"); return; }
   closeCommentPopup();
+  if (multi.length) { flash("Select one box to comment on it"); return; }
+  if (sel && at(sel)) { commentOnSelection(); return; }
+  draft = null;
   commentPlacing = true;
   el.viewport.classList.add("placing");
+  el.commentBtn.classList.add("on");
   render();
-  flash("Click where the comment goes, esc cancels");
+  flash("Draw the comment's box, or click a point; esc cancels");
 }
 
 function cancelCommentPlacement() {
   commentPlacing = false;
+  if (draft && draft.comment) draft = null;
   el.viewport.classList.remove("placing");
+  el.commentBtn.classList.remove("on");
 }
 
-/** Called by pointerEditStart for a press while placing. */
-function placeComment(p) {
+/** Called by pointerEditStart for the first press while placing: the comment's
+    box is drawn like any box, in the drawing mode set (two clicks or a drag). */
+function startCommentDraft(e, p) {
+  draft = { x0: p.x, y0: p.y, x1: p.x, y1: p.y, button: e.button,
+            open: prefs.pointer.draw !== "drag", comment: true };
+  sel = null;
+  render();
+}
+
+/** Called by endDraft for a comment's box: big enough, a comment box; a
+    click without a drag, a comment on that point. */
+function finishCommentDraft() {
+  const d = draft;
+  draft = null;
   cancelCommentPlacement();
-  openCommentPopup({ id: null, x: clamp(p.x / natW, 0, 1), y: clamp(p.y / natH, 0, 1), text: "" });
+  const x1 = clamp(Math.min(d.x0, d.x1), 0, natW), x2 = clamp(Math.max(d.x0, d.x1), 0, natW);
+  const y1 = clamp(Math.min(d.y0, d.y1), 0, natH), y2 = clamp(Math.max(d.y0, d.y1), 0, natH);
+  if (x2 - x1 < MIN_BOX || y2 - y1 < MIN_BOX) {
+    openCommentPopup({ id: null, kind: "point", x: clamp(d.x0 / natW, 0, 1), y: clamp(d.y0 / natH, 0, 1), text: "" });
+    return;
+  }
+  const box = [x1 / natW, y1 / natH, x2 / natW, y2 / natH];
+  openCommentPopup({ id: null, kind: "region", box, x: box[0], y: box[1], text: "" });
+  render();
+}
+
+/** c with one box selected: a comment on that box. */
+function commentOnSelection() {
+  const b = at(sel);
+  const box = [b.x1 / natW, b.y1 / natH, b.x2 / natW, b.y2 / natH];
+  openCommentPopup({ id: null, kind: sel.kind, box, cls: b.cls || null, x: box[2], y: box[1], text: "" });
+}
+
+const COMMENT_ON = { point: "on this spot", region: "on this area", box: "on a box of yours",
+                     pred: "on a sam3 box", exem: "on an exemplar" };
+
+/** Where a comment's pin goes, in image px: the point; a comment box's top
+    left corner; for a comment on a box, the top right corner of the box that
+    is there now - the one overlapping most with where it was, so the comment
+    follows a box that is moved - or of where it was, if none is left. */
+function commentAnchor(c) {
+  if (!c.box || !c.kind || c.kind === "point") return { x: c.x * natW, y: c.y * natH };
+  const r = { x1: c.box[0] * natW, y1: c.box[1] * natH, x2: c.box[2] * natW, y2: c.box[3] * natH };
+  if (c.kind === "region") return { x: r.x1, y: r.y1 };
+  const list = c.kind === "box" ? boxes : c.kind === "pred" ? preds : exems;
+  let best = r, most = 0.3;
+  for (const b of list) {
+    const v = iou(b, r);
+    if (v >= most) { most = v; best = b; }
+  }
+  return { x: best.x2, y: best.y1 };
 }
 
 function commentScreen(c) {
-  const s = scale();
-  return { x: panX + c.x * natW * s, y: panY + c.y * natH * s };
+  const s = scale(), a = commentAnchor(c);
+  return { x: panX + a.x * s, y: panY + a.y * s };
+}
+
+/** A box was moved or resized: the comments on it go with it, saved at once,
+    so they stay on their box however far it moved. */
+async function commentsFollow(kind, from, to) {
+  const name = images[idx] && images[idx].name;
+  if (!name) return;
+  const box = [to.x1 / natW, to.y1 / natH, to.x2 / natW, to.y2 / natH];
+  for (const c of comments) {
+    if (c.kind !== kind || !c.box) continue;
+    const r = { x1: c.box[0] * natW, y1: c.box[1] * natH, x2: c.box[2] * natW, y2: c.box[3] * natH };
+    if (iou(r, from) < 0.5) continue;
+    c.box = box;                                    // at once, so the pin moves now
+    try {
+      Object.assign(c, await commentRequest("PATCH",
+        `api/comments/${encodeURIComponent(name)}/${c.id}`, { box }));
+    } catch (err) {
+      flash(`A comment could not follow its box: ${err.message}`);
+    }
+  }
+  schedulePins();
+}
+
+/** Comment boxes, with the annotations: dashed, never filled. Hidden with the
+    boxes (h). A new one shows while its text is being written. */
+function renderCommentBoxes() {
+  const list = comments.filter((c) => c.kind === "region" && c.box);
+  if (openComment && !openComment.id && openComment.kind === "region") list.push(openComment);
+  for (const c of list) {
+    const r = rect({ x1: c.box[0] * natW, y1: c.box[1] * natH, x2: c.box[2] * natW, y2: c.box[3] * natH },
+                   "cbox" + (c.resolved ? " resolved" : "") + (openComment === c || (openComment && openComment.id && openComment.id === c.id) ? " open" : ""));
+    el.svg.appendChild(r);
+  }
 }
 
 function schedulePins() {
@@ -4882,12 +5112,13 @@ function renderPins() {
   if (show) {
     comments.forEach((c, k) => {
       const p = commentScreen(c);
-      const b = h("button", "pin" + (c.resolved ? " resolved" : "")
-        + (openComment && openComment.id === c.id ? " open" : ""), String(k + 1));
+      const region = c.kind === "region";
+      const b = h("button", "pin" + (region ? " region" : "") + (c.resolved ? " resolved" : "")
+        + (openComment && openComment.id === c.id ? " open" : ""), region ? `${k + 1} comment` : String(k + 1));
       b.type = "button";
       b.style.left = `${p.x}px`;
       b.style.top = `${p.y}px`;
-      b.title = `${c.resolved ? "Resolved: " : ""}${c.text}`;
+      b.title = `${c.resolved ? "Resolved: " : ""}${c.text}\n(${COMMENT_ON[c.kind || "point"]}${c.cls ? ", " + c.cls : ""})`;
       b.setAttribute("aria-label", `Comment ${k + 1}${c.resolved ? ", resolved" : ""}: ${c.text}`);
       b.addEventListener("click", () => openCommentPopup(c));
       frag.appendChild(b);
@@ -4909,8 +5140,9 @@ function openCommentPopup(c) {
   openComment = c;
   const isNew = !c.id;
   el.cpopText.value = c.text || "";
-  el.cpopMeta.textContent = isNew ? "New comment"
-    : `${c.author || "someone"}, ${new Date(c.updated || c.created).toLocaleString()}`
+  const on = COMMENT_ON[c.kind || "point"] + (c.cls ? ` (${c.cls})` : "");
+  el.cpopMeta.textContent = isNew ? `New comment ${on}`
+    : `${c.author || "someone"}, ${new Date(c.updated || c.created).toLocaleString()}, ${on}`
       + (c.resolved ? " \u2013 resolved" : "");
   el.cpopResolve.hidden = isNew;
   el.cpopDelete.hidden = isNew;
@@ -4922,9 +5154,11 @@ function openCommentPopup(c) {
 }
 
 function closeCommentPopup() {
+  const pending = openComment && !openComment.id && openComment.kind === "region";
   openComment = null;
   el.cpop.hidden = true;
   schedulePins();
+  if (pending && view === "editor") render();      // a comment box never saved goes
 }
 
 async function commentRequest(method, path, body) {
@@ -4944,7 +5178,8 @@ async function saveComment() {
   const name = encodeURIComponent(images[idx].name);
   try {
     if (!c.id) {
-      comments.push(await commentRequest("POST", `api/comments/${name}`, { x: c.x, y: c.y, text }));
+      comments.push(await commentRequest("POST", `api/comments/${name}`,
+        { x: c.x, y: c.y, text, kind: c.kind || "point", box: c.box || null, cls: c.cls || null }));
     } else if (text !== c.text) {
       const upd = await commentRequest("PATCH", `api/comments/${name}/${c.id}`, { text });
       comments = comments.map((x) => (x.id === upd.id ? upd : x));
@@ -5057,6 +5292,11 @@ function keyPanRow() {
   return row;
 }
 
+
+el.commentBtn.addEventListener("click", () => {
+  if (commentPlacing) { cancelCommentPlacement(); render(); return; }
+  startCommentPlacement();
+});
 // ---------------------------------------------------------------- selecting several boxes
 //
 // `sel` is one box, with handles to move and resize it. `multi` is several at
@@ -5272,7 +5512,9 @@ el.areaBtn.addEventListener("click", () => toggleMarquee());
 // (settings.json), in order: an image starts in the first stage; f moves the
 // open image on to the next, shift f back; any stage can be picked from the
 // chip in the header, and the grid moves a selection of images at once.
-// Stages that count as done drive the progress and the ✓ on tiles.
+// The LAST stage is "signed off" - the workflow completed: it gets the ✓ on
+// tiles, and the projects page counts it as done. Each stage can carry
+// instructions, shown on the stage chip to whoever works on an image.
 //
 // Each stage has a fixed id; renaming it changes only its name, so nothing
 // stored needs rewriting - and a workflow canvas can later connect stages by
@@ -5280,10 +5522,10 @@ el.areaBtn.addEventListener("click", () => toggleMarquee());
 // the first stage, and come back if a stage with that id is added again.
 
 const DEFAULT_STAGES = [
-  { id: "none", name: "No stage", color: "#4a5460", done: false },
-  { id: "annotating", name: "Annotating", color: "#8a7fd4", done: false },
-  { id: "review", name: "In review", color: "#e0a13a", done: false },
-  { id: "signed_off", name: "Signed off", color: "#4bd6a4", done: true },
+  { id: "none", name: "No stage", color: "#4a5460", instructions: "" },
+  { id: "annotating", name: "Annotating", color: "#8a7fd4", instructions: "" },
+  { id: "review", name: "In review", color: "#e0a13a", instructions: "" },
+  { id: "signed_off", name: "Signed off", color: "#4bd6a4", instructions: "" },
 ];
 
 let imageStage = "";          // the open image's stage id
@@ -5297,14 +5539,22 @@ function stageOf(id) {
   const list = stageList();
   return list.find((s) => s.id === id) || list[0];
 }
+/** Signed off: in the last stage of the workflow. */
+function isFinal(st) {
+  const list = stageList();
+  return !!st && st.id === list[list.length - 1].id;
+}
 
 // ---------------------------------------------------------------- in the editor
 
 function renderStageChip() {
   const st = stageOf(imageStage);
   el.stageSwatch.style.background = st.color;
-  el.stageChipName.textContent = st.name + (st.done ? " \u2713" : "");
-  el.stageChip.title = "Stage of this image: f moves it on, shift f back, click to choose";
+  el.stageChipName.textContent = st.name + (isFinal(st) ? " \u2713" : "");
+  el.stageChip.classList.toggle("has-notes", !!(st.instructions || "").trim());
+  el.stageChip.title = (st.instructions || "").trim()
+    ? `${st.name}: ${st.instructions.trim()}\n\nf moves the image on, shift f back, click to choose`
+    : "Stage of this image: f moves it on, shift f back, click to choose";
 }
 
 /** Move the open image to a stage. Undoable like any edit; the server logs it. */
@@ -5337,7 +5587,8 @@ function renderStageMenu() {
     b.setAttribute("role", "menuitem");
     const sw = h("i");
     sw.style.background = st.color;
-    b.append(h("span", "k", ""), sw, h("span", "n", st.name + (st.done ? " \u2713" : "")));
+    b.append(h("span", "k", ""), sw, h("span", "n", st.name + (isFinal(st) ? " \u2713" : "")));
+    if ((st.instructions || "").trim()) b.title = st.instructions.trim();
     b.addEventListener("click", () => { closeStageMenu(); setImageStage(st.id); });
     frag.appendChild(b);
   }
@@ -5387,7 +5638,7 @@ let gridAnchor = -1;          // index into `images` of the last box clicked
 function shownImages() {
   const needle = el.search.value.trim().toLowerCase();
   return images.filter((im) => (!needle || im.name.toLowerCase().includes(needle))
-    && (filter === "all" || stageOf(im.stage).id === filter));
+    && (filter === "all" || stageOf(im.stage).id === filter) && matchesContent(im));
 }
 
 function renderGridSelection() {
@@ -5542,17 +5793,24 @@ function stageRow(st, i, list, counts) {
     if (e.key === "Escape") { e.preventDefault(); name.value = st.name; name.blur(); }
   });
 
-  const done = h("label", "stylefield toggle");
-  const cb = h("input");
-  cb.type = "checkbox";
-  cb.checked = !!st.done;
-  cb.dataset.f = `stage:${st.id}:done`;
-  cb.addEventListener("change", () => { editableStages()[i].done = cb.checked; stagesChanged(); });
-  done.append(cb, h("span", "", "done"));
-  done.title = "Images here count as finished: the project's progress, and the \u2713 on their tiles";
+  // Instructions: a box that opens a text field under the row.
+  const notes = (st.instructions || "").trim();
+  const open = openInstructions.has(st.id);
+  const note = h("button", "badge notebtn" + (notes ? " has" : "") + (open ? " on" : ""),
+                 notes ? "instructions \u270e" : "instructions");
+  note.type = "button";
+  note.dataset.f = `stage:${st.id}:notes`;
+  note.setAttribute("aria-expanded", String(open));
+  note.title = notes || "Write what to do in this stage";
+  note.addEventListener("click", () => {
+    if (openInstructions.has(st.id)) openInstructions.delete(st.id);
+    else openInstructions.add(st.id);
+    renderKeys();
+    if (openInstructions.has(st.id)) focusKey(`stage:${st.id}:text`);
+  });
 
   const n = project ? counts[st.id] || 0 : null;
-  const info = h("span", "classid", (i === 0 ? "start \u00b7 " : "")
+  const info = h("span", "classid", (i === 0 ? "start \u00b7 " : i === list.length - 1 ? "signed off \u00b7 " : "")
     + (n === null ? "" : plural(n, "image", "images")));
 
   const actions = h("span", "keyactions");
@@ -5584,10 +5842,32 @@ function stageRow(st, i, list, counts) {
     });
   }
   const wrap = h("span", "chips");
-  wrap.append(color, name, done, info);
+  wrap.append(color, name, note, info);
   row.append(h("span", "classkey", String(i + 1)), wrap, actions);
-  return row;
+  if (!open) return row;
+  const box = h("div", "stagenotes");
+  const ta = h("textarea");
+  ta.rows = 4;
+  ta.maxLength = 4000;
+  ta.value = st.instructions || "";
+  ta.placeholder = `What to do in \u201c${st.name}\u201d - shown on the stage chip to whoever works on an image in it`;
+  ta.dataset.f = `stage:${st.id}:text`;
+  ta.setAttribute("aria-label", `Instructions for ${st.name}`);
+  ta.addEventListener("change", () => {
+    editableStages()[i].instructions = ta.value.trim();
+    stagesChanged();
+    keyStatus(`Instructions for ${st.name} saved.`);
+  });
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); ta.blur(); }   // keeps what was typed: change saves it
+  });
+  box.appendChild(ta);
+  const frag = document.createDocumentFragment();
+  frag.append(row, box);
+  return frag;
 }
+
+const openInstructions = new Set();   // stage ids whose instructions box is open
 
 function renderWorkflow() {
   const frag = document.createDocumentFragment();
@@ -5599,8 +5879,9 @@ function renderWorkflow() {
     sec.appendChild(h("p", "keyhint",
       `The stages of ${project}, in order. An image starts in the first; in the editor f moves `
       + "it to the next and shift f back, and the stage chip in the header picks any. In the grid, "
-      + "select images and move them together. Stages marked done count as finished - the "
-      + "project's progress, and the \u2713 on tiles. Renaming a stage keeps its images in it."));
+      + "select images and move them together. The last stage is signed off - the workflow "
+      + "completed: the \u2713 on tiles, and the % on the projects page. Instructions show on "
+      + "the stage chip. Renaming a stage keeps its images in it."));
     const list = stageList(), counts = stageCounts();
     list.forEach((st, i) => sec.appendChild(stageRow(st, i, list, counts)));
 
@@ -5622,10 +5903,9 @@ function renderWorkflow() {
         return;
       }
       const a = editableStages();
-      // Before the last done stage, where a new step usually belongs.
-      const at = a.map((s) => s.done).lastIndexOf(true);
-      a.splice(at > 0 ? at : a.length, 0,
-               { id: stageIdFor(v), name: v, color: PALETTE[a.length % PALETTE.length], done: false });
+      // Before the last stage, so signed off stays the end of the workflow.
+      a.splice(Math.max(a.length - 1, 0), 0,
+               { id: stageIdFor(v), name: v, color: PALETTE[a.length % PALETTE.length], instructions: "" });
       stagesChanged();
       keyStatus(`Added ${v}.`);
       focusKey("stage:add:name");
@@ -5640,6 +5920,663 @@ function renderWorkflow() {
   el.keysChanged.textContent = project ? plural(stageList().length, "stage", "stages") : "";
   el.keysResetAll.disabled = true;
 }
+
+// ---------------------------------------------------------------- filtering images by content
+//
+// Which images the grid shows, by what is in them: how many boxes of yours,
+// sam3 boxes, exemplars and open comments (each a from-to range; empty is no
+// limit), which classes they have, and which image flags. Each class and each
+// flag is a chip with three states - ignored, must have (✓), must not have
+// (✗) - and the ticked ones can be required all together or any one of them.
+//
+// It combines with the name filter and the stage tab: the tab counts, the
+// tiles and "select shown" all follow all three. Remembered per project.
+// sam3 boxes and exemplars are the selected run's; sam3 boxes are those at or
+// above the confidence threshold, as the run proposed them.
+
+const CF_COUNTS = [
+  ["boxes", "boxes of yours"],
+  ["preds", "sam3 boxes"],
+  ["exems", "exemplars"],
+  ["comments", "open comments"],
+];
+const K_CFILTER = (p) => `al.cfilter:${p}`;
+
+function emptyContentFilter() {
+  const f = { classes: {}, mode: "all", flags: {}, flagMode: "any" };
+  for (const [k] of CF_COUNTS) f[k] = [null, null];
+  return f;
+}
+let cfilter = emptyContentFilter();
+let statsStale = false;       // sam3 and exemplar counts are for another run or threshold
+
+function loadContentFilter() {
+  cfilter = emptyContentFilter();
+  try {
+    const saved = JSON.parse(localStorage.getItem(K_CFILTER(project)) || "null");
+    if (saved) cfilter = { ...cfilter, ...saved };
+  } catch (err) { /* a damaged entry is just no filter */ }
+}
+function saveContentFilter() {
+  if (project) localStorage.setItem(K_CFILTER(project), JSON.stringify(cfilter));
+}
+
+/** Class states that still mean something: renamed or removed classes drop out. */
+function classStates() {
+  const list = classList();
+  return Object.entries(cfilter.classes).filter(([n, s]) => list.includes(n) && s);
+}
+
+const flagStates = () => Object.entries(cfilter.flags || {}).filter(([, s]) => s);
+
+function contentFilterCount() {
+  let n = 0;
+  for (const [k] of CF_COUNTS) if (cfilter[k][0] !== null || cfilter[k][1] !== null) n++;
+  return n + classStates().length + flagStates().length;
+}
+
+function matchesContent(im) {
+  for (const [k] of CF_COUNTS) {
+    const [lo, hi] = cfilter[k];
+    const v = im[k] || 0;
+    if (lo !== null && v < lo) return false;
+    if (hi !== null && v > hi) return false;
+  }
+  const cls = im.classes || {};
+  const states = classStates();
+  if (states.some(([n, s]) => s === "not" && cls[n])) return false;
+  const want = states.filter(([, s]) => s === "has").map(([n]) => n);
+  if (want.length && !(cfilter.mode === "all" ? want.every((n) => cls[n]) : want.some((n) => cls[n]))) {
+    return false;
+  }
+  const fl = new Set(im.flags || []);
+  const fstates = flagStates();
+  if (fstates.some(([f, s]) => s === "not" && fl.has(f))) return false;
+  const fwant = fstates.filter(([, s]) => s === "has").map(([f]) => f);
+  if (fwant.length && !(cfilter.flagMode === "all" ? fwant.every((f) => fl.has(f)) : fwant.some((f) => fl.has(f)))) {
+    return false;
+  }
+  return true;
+}
+
+/** What is in an image, for its tile's tooltip. */
+function contentSummary(im) {
+  const parts = [];
+  const cls = Object.entries(im.classes || {});
+  parts.push(plural(im.boxes || 0, "box", "boxes")
+    + (cls.length ? ` (${cls.map(([n, c]) => `${n} ${c}`).join(", ")})` : ""));
+  if (im.preds) parts.push(`${im.preds} sam3`);
+  if (im.exems) parts.push(plural(im.exems, "exemplar", "exemplars"));
+  if (im.comments) parts.push(plural(im.comments, "open comment", "open comments"));
+  if (im.flags && im.flags.length) parts.push("\u2691 " + describeFlags(im.flags, im.flag_note || ""));
+  return parts.join(" \u00b7 ");
+}
+
+/** The selected run's counts, at the current threshold. Merged into `images`
+    by name, so the editor's place in the list is untouched. */
+async function refreshImageStats() {
+  statsStale = false;
+  try {
+    const r = await fetch(q("api/images", { min_score: threshold }));
+    if (!r.ok) throw new Error(`api/images returned ${r.status}`);
+    const fresh = new Map((await r.json()).map((im) => [im.name, im]));
+    for (const im of images) {
+      const f = fresh.get(im.name);
+      if (f) Object.assign(im, f);
+    }
+  } catch (err) {
+    console.warn("image counts not refreshed:", err.message);
+  }
+  if (view === "dataset") { sortImages(); renderGrid(); }
+}
+
+/** After a run switch or a new threshold: now if the grid is on screen,
+    otherwise when it is next shown. */
+function imageStatsChanged() {
+  statsStale = true;
+  if (view === "dataset") refreshImageStats();
+}
+
+/** The editor keeps the open image's entry current as it is edited. */
+function noteImageContents() {
+  const im = images[idx];
+  if (!im || view !== "editor" || !natW) return;
+  const cls = {};
+  for (const b of boxes) cls[b.cls] = (cls[b.cls] || 0) + 1;
+  im.classes = cls;
+  im.exems = exems.length;
+  im.comments = comments.filter((c) => !c.resolved).length;
+  im.flags = [...imageFlags];
+  im.flag_note = flagNote;
+}
+
+// ---------------------------------------------------------------- the panel
+
+function renderFilterButton() {
+  const n = contentFilterCount();
+  el.filterBtn.textContent = n ? `filter (${n})` : "filter";
+  el.filterBtn.classList.toggle("on", n > 0);
+}
+
+function renderFilterPanel() {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(h("div", "fp-title", "Show images with"));
+  for (const [k, label] of CF_COUNTS) {
+    const row = h("div", "fp-row");
+    const num = (which, ph) => {
+      const i = h("input", "field fp-num");
+      i.type = "number";
+      i.min = "0";
+      i.step = "1";
+      i.placeholder = ph;
+      i.value = cfilter[k][which] === null ? "" : String(cfilter[k][which]);
+      i.dataset.f = `cf:${k}:${which ? "to" : "from"}`;
+      i.setAttribute("aria-label", `${label}, ${which ? "at most" : "at least"}`);
+      i.addEventListener("input", () => {
+        const v = i.value.trim() === "" ? null : Math.max(0, Math.floor(Number(i.value)));
+        cfilter[k][which] = Number.isFinite(v) ? v : null;
+        contentFilterChanged();
+      });
+      return i;
+    };
+    row.append(h("span", "fp-label", label), h("span", "fp-sep", "from"), num(0, "0"),
+               h("span", "fp-sep", "to"), num(1, "any"));
+    frag.appendChild(row);
+  }
+  if (!run) frag.appendChild(h("p", "fp-note", "Select a run above to filter by its sam3 boxes and exemplars."));
+  else frag.appendChild(h("p", "fp-note", `sam3 boxes and exemplars of ${run}; sam3 boxes at confidence \u2265 ${threshold.toFixed(2)}.`));
+
+  const list = classList();
+  const head = h("div", "fp-row fp-classhead");
+  head.appendChild(h("span", "fp-label", "classes"));
+  const mode = h("button", "badge", cfilter.mode === "all" ? "all of the \u2713" : "any of the \u2713");
+  mode.type = "button";
+  mode.dataset.f = "cf:mode";
+  mode.title = "Whether an image needs every class ticked \u2713, or one of them is enough";
+  mode.addEventListener("click", () => {
+    cfilter.mode = cfilter.mode === "all" ? "any" : "all";
+    contentFilterChanged();
+    renderFilterPanel();
+  });
+  head.appendChild(mode);
+  frag.appendChild(head);
+  const chips = h("div", "fp-classes");
+  if (!list.length) chips.appendChild(h("span", "fp-note", "No classes in this project yet."));
+  for (const name of list) {
+    const state = cfilter.classes[name] || "";
+    const c = h("button", "fp-class" + (state ? " " + state : ""));
+    c.type = "button";
+    c.dataset.f = `cf:class:${name}`;
+    c.title = "click: must have \u2713, again: must not have \u2717, again: either";
+    const sw = h("i");
+    sw.style.background = classStyle(name).color;
+    c.append(h("span", "fp-mark", state === "has" ? "\u2713" : state === "not" ? "\u2717" : ""), sw, name);
+    c.setAttribute("aria-pressed", String(!!state));
+    c.addEventListener("click", () => {
+      const next = { "": "has", has: "not", not: "" }[state];
+      if (next) cfilter.classes[name] = next;
+      else delete cfilter.classes[name];
+      contentFilterChanged();
+      renderFilterPanel();
+      focusFilter(`cf:class:${name}`);
+    });
+    chips.appendChild(c);
+  }
+  frag.appendChild(chips);
+
+  // Image flags: the same three states, no colours.
+  const fhead = h("div", "fp-row fp-classhead");
+  fhead.appendChild(h("span", "fp-label", "image flags"));
+  const fmode = h("button", "badge", cfilter.flagMode === "all" ? "all of the \u2713" : "any of the \u2713");
+  fmode.type = "button";
+  fmode.dataset.f = "cf:flagmode";
+  fmode.title = "Whether an image needs every flag ticked \u2713, or one of them is enough";
+  fmode.addEventListener("click", () => {
+    cfilter.flagMode = cfilter.flagMode === "all" ? "any" : "all";
+    contentFilterChanged();
+    renderFilterPanel();
+  });
+  fhead.appendChild(fmode);
+  frag.appendChild(fhead);
+  const fchips = h("div", "fp-classes");
+  for (const [id, label] of IMAGE_FLAGS) {
+    const state = (cfilter.flags || {})[id] || "";
+    const c = h("button", "fp-class fp-flag" + (state ? " " + state : ""));
+    c.type = "button";
+    c.dataset.f = `cf:flag:${id}`;
+    c.title = "click: must have \u2713, again: must not have \u2717, again: either";
+    c.append(h("span", "fp-mark", state === "has" ? "\u2713" : state === "not" ? "\u2717" : ""), label);
+    c.setAttribute("aria-pressed", String(!!state));
+    c.addEventListener("click", () => {
+      const next = { "": "has", has: "not", not: "" }[state];
+      cfilter.flags = cfilter.flags || {};
+      if (next) cfilter.flags[id] = next;
+      else delete cfilter.flags[id];
+      contentFilterChanged();
+      renderFilterPanel();
+      focusFilter(`cf:flag:${id}`);
+    });
+    fchips.appendChild(c);
+  }
+  frag.appendChild(fchips);
+
+  const foot = h("div", "fp-foot");
+  const matching = images.filter(matchesContent).length;
+  foot.appendChild(h("span", "fp-count", `${matching} of ${plural(images.length, "image", "images")} match`));
+  const clear = h("button", "badge", "clear filter");
+  clear.type = "button";
+  clear.dataset.f = "cf:clear";
+  clear.disabled = !contentFilterCount();
+  clear.addEventListener("click", () => {
+    cfilter = emptyContentFilter();
+    contentFilterChanged();
+    renderFilterPanel();
+  });
+  foot.appendChild(clear);
+  frag.appendChild(foot);
+  el.filterPanel.replaceChildren(frag);
+}
+
+function focusFilter(f) {
+  const t = el.filterPanel.querySelector(`[data-f="${CSS.escape(f)}"]`);
+  if (t) t.focus();
+}
+
+function contentFilterChanged() {
+  saveContentFilter();
+  renderFilterButton();
+  renderGrid();
+  const count = el.filterPanel.querySelector(".fp-count");
+  if (count) count.textContent = `${images.filter(matchesContent).length} of ${plural(images.length, "image", "images")} match`;
+  const clear = el.filterPanel.querySelector('[data-f="cf:clear"]');
+  if (clear) clear.disabled = !contentFilterCount();
+}
+
+function openFilterPanel() {
+  renderFilterPanel();
+  el.filterPanel.hidden = false;
+  el.filterBtn.setAttribute("aria-expanded", "true");
+  const r = el.filterBtn.getBoundingClientRect();
+  el.filterPanel.style.top = `${Math.round(r.bottom + 6)}px`;
+  el.filterPanel.style.left = `${Math.round(Math.max(8, Math.min(r.left, innerWidth - el.filterPanel.offsetWidth - 8)))}px`;
+}
+function closeFilterPanel() {
+  el.filterPanel.hidden = true;
+  el.filterBtn.setAttribute("aria-expanded", "false");
+}
+el.filterBtn.addEventListener("click", () => (el.filterPanel.hidden ? openFilterPanel() : closeFilterPanel()));
+window.addEventListener("mousedown", (e) => {
+  if (!el.filterPanel.hidden && !e.target.closest("#filterPanel, #filterBtn")) closeFilterPanel();
+}, true);
+el.filterPanel.addEventListener("keydown", (e) => {
+  e.stopPropagation();                       // typing a number is not a shortcut
+  if (e.key === "Escape") { e.preventDefault(); closeFilterPanel(); el.filterBtn.focus(); }
+});
+
+// ---------------------------------------------------------------- sorting the grid
+//
+// The sort reorders the image list itself, so the editor follows it too: d and
+// a, the image strip and a scan's "on to the next image" go in the order the
+// grid shows. Ties fall back to the name, so the order is always the same for
+// the same data. Remembered per project.
+
+const SORT_KEYS = [
+  ["name", "name"],
+  ["bytes", "file size"],
+  ["boxes", "boxes"],
+  ["exems", "exemplars"],
+  ["preds", "sam3 boxes"],
+];
+const K_SORT = (p) => `al.sort:${p}`;
+let gridSort = { key: "name", dir: 1 };
+
+function loadGridSort() {
+  gridSort = { key: "name", dir: 1 };
+  try {
+    const saved = JSON.parse(localStorage.getItem(K_SORT(project)) || "null");
+    if (saved && SORT_KEYS.some(([k]) => k === saved.key)) gridSort = { key: saved.key, dir: saved.dir < 0 ? -1 : 1 };
+  } catch (err) { /* a damaged entry is just the default */ }
+  renderSortControls();
+}
+
+const byName = (a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+/** Only between editor visits: the editor's place in the list is by index. */
+function sortImages() {
+  const { key, dir } = gridSort;
+  images.sort(key === "name"
+    ? (a, b) => byName(a, b) * dir
+    : (a, b) => ((a[key] || 0) - (b[key] || 0)) * dir || byName(a, b));
+  // The image strip caches its tiles by position, which just changed.
+  for (const t of strip.tiles.values()) t.remove();
+  strip.tiles.clear();
+  gridAnchor = -1;
+}
+
+function renderSortControls() {
+  if (!el.sortSel.options.length) {
+    el.sortSel.replaceChildren(...SORT_KEYS.map(([k, label]) => new Option(label, k)));
+  }
+  el.sortSel.value = gridSort.key;
+  el.sortDir.textContent = gridSort.dir > 0 ? "\u2191 asc" : "\u2193 desc";
+  el.sortDir.title = gridSort.dir > 0 ? "Ascending: smallest first (A to Z for names)" : "Descending: largest first (Z to A for names)";
+}
+
+function gridSortChanged() {
+  if (project) localStorage.setItem(K_SORT(project), JSON.stringify(gridSort));
+  renderSortControls();
+  sortImages();
+  renderGrid();
+}
+el.sortSel.addEventListener("change", () => {
+  gridSort.key = el.sortSel.value;
+  el.sortSel.blur();
+  gridSortChanged();
+});
+el.sortDir.addEventListener("click", () => { gridSort.dir = -gridSort.dir; gridSortChanged(); });
+
+// ---------------------------------------------------------------- the projects page: filter and sort
+//
+// "Signed off" is the share of a project's images in the last stage of its
+// workflow.
+
+const PROJECT_SORTS = [
+  ["name", "name"],
+  ["images", "images"],
+  ["boxes", "boxes"],
+  ["done", "% signed off"],
+];
+const K_PROJSORT = "al.projsort";
+let projectSort = { key: "name", dir: 1 };
+try {
+  const saved = JSON.parse(localStorage.getItem(K_PROJSORT) || "null");
+  if (saved && PROJECT_SORTS.some(([k]) => k === saved.key)) projectSort = { key: saved.key, dir: saved.dir < 0 ? -1 : 1 };
+} catch (err) { /* the default */ }
+
+/** The share of a project's images in its last stage, 0 to 1. */
+function signedOffShare(p) {
+  const stages = p.stages || [];
+  const last = stages[stages.length - 1];
+  return last && p.images ? ((p.stage_counts || {})[last.id] || 0) / p.images : 0;
+}
+
+function visibleProjects() {
+  const needle = el.projSearch.value.trim().toLowerCase();
+  const list = projects.filter((p) => !needle || p.name.toLowerCase().includes(needle));
+  const value = { images: (p) => p.images, boxes: (p) => p.boxes || 0, done: signedOffShare }[projectSort.key];
+  const { dir } = projectSort;
+  list.sort(value ? (a, b) => (value(a) - value(b)) * dir || byName(a, b) : (a, b) => byName(a, b) * dir);
+  return list;
+}
+
+function renderProjectControls() {
+  if (!el.projSort.options.length) {
+    el.projSort.replaceChildren(...PROJECT_SORTS.map(([k, label]) => new Option(label, k)));
+  }
+  el.projSort.value = projectSort.key;
+  el.projSortDir.textContent = projectSort.dir > 0 ? "\u2191 asc" : "\u2193 desc";
+}
+function projectSortChanged() {
+  localStorage.setItem(K_PROJSORT, JSON.stringify(projectSort));
+  renderProjectControls();
+  renderProjects();
+}
+el.projSort.addEventListener("change", () => {
+  projectSort.key = el.projSort.value;
+  el.projSort.blur();
+  projectSortChanged();
+});
+el.projSortDir.addEventListener("click", () => { projectSort.dir = -projectSort.dir; projectSortChanged(); });
+el.projSearch.addEventListener("input", () => renderProjects());
+el.projSearch.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Escape") { el.projSearch.value = ""; renderProjects(); el.projSearch.blur(); }
+});
+
+// ---------------------------------------------------------------- image flags
+//
+// What is wrong with an image, beside where it is in the workflow: any number
+// of a fixed set of flags, and for "Other" a few words saying what. Set from
+// the flags chip in the header (or keys you bind to each flag), saved with
+// the image like its stage, undoable, logged. The grid filter can require or
+// exclude each one. No colours of their own: they are notes, not categories.
+
+const IMAGE_FLAGS = [
+  ["motion_blur", "Motion blur"],
+  ["out_of_focus", "Out of focus"],
+  ["occluded", "Occluded"],
+  ["no_object", "No object"],
+  ["not_qualified", "Not qualified"],
+  ["other", "Other"],
+];
+const flagLabel = (id) => (IMAGE_FLAGS.find(([k]) => k === id) || [id, id])[1];
+
+let imageFlags = [];          // the open image's flags, in the order above
+let flagNote = "";            // what "Other" is
+
+function describeFlags(flags, note) {
+  return flags.map((f) => (f === "other" && note ? `Other: ${note}` : flagLabel(f))).join(", ");
+}
+
+function renderFlagChip() {
+  const n = imageFlags.length;
+  el.flagChipName.textContent = !n ? "no flags" : n === 1 ? flagLabel(imageFlags[0]) : `${n} flags`;
+  el.flagChip.classList.toggle("on", n > 0);
+  el.flagChip.title = n ? `Image flags: ${describeFlags(imageFlags, flagNote)}` : "Flag a problem with this image";
+}
+
+/** Set the open image's flags. Undoable; saved with the image. */
+function setImageFlags(flags, note) {
+  if (view !== "editor" || !images[idx]) return;
+  const ordered = IMAGE_FLAGS.map(([k]) => k).filter((k) => flags.includes(k));
+  const n = ordered.includes("other") ? (note || "").trim() : "";
+  if (String(ordered) === String(imageFlags) && n === flagNote) return;
+  const before = snapshot();
+  imageFlags = ordered;
+  flagNote = n;
+  record("image flags", before, []);
+  touch();
+  render();
+}
+
+function toggleFlag(id) {
+  const on = imageFlags.includes(id);
+  setImageFlags(on ? imageFlags.filter((f) => f !== id) : [...imageFlags, id], flagNote);
+  flash(`${flagLabel(id)}: ${on ? "off" : "on"}`);
+  if (!el.flagMenu.hidden) {
+    renderFlagMenu();
+    // Other just ticked: straight to saying what it is, so the typing goes
+    // there and not to the editor's shortcuts.
+    const note = el.flagMenu.querySelector(".flagnote");
+    if (id === "other" && !on && note) note.focus();
+    else focusFlagItem(id);
+  }
+}
+
+function focusFlagItem(id) {
+  const b = el.flagMenu.querySelector(`[data-f="flag:${id}"]`);
+  if (b) b.focus();
+}
+
+function renderFlagMenu() {
+  const frag = document.createDocumentFragment();
+  for (const [id, label] of IMAGE_FLAGS) {
+    const on = imageFlags.includes(id);
+    const b = h("button", "classitem flagitem" + (on ? " on" : ""));
+    b.type = "button";
+    b.setAttribute("role", "menuitemcheckbox");
+    b.setAttribute("aria-checked", String(on));
+    b.dataset.f = `flag:${id}`;
+    b.append(h("span", "k", on ? "\u2713" : ""), h("span", "n", label));
+    b.addEventListener("click", () => toggleFlag(id));
+    frag.appendChild(b);
+  }
+  if (imageFlags.includes("other")) {
+    const note = h("input", "field flagnote");
+    note.type = "text";
+    note.maxLength = 500;
+    note.placeholder = "what is it?";
+    note.value = flagNote;
+    note.dataset.f = "flag:note";
+    note.setAttribute("aria-label", "What the Other flag means");
+    note.addEventListener("change", () => setImageFlags(imageFlags, note.value));
+    note.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); setImageFlags(imageFlags, note.value); closeFlagMenu(); }
+      if (e.key === "Escape") { e.preventDefault(); closeFlagMenu(); }
+    });
+    frag.appendChild(note);
+  }
+  el.flagMenu.replaceChildren(frag);
+}
+
+function openFlagMenu() {
+  renderFlagMenu();
+  const r = el.flagChip.getBoundingClientRect();
+  el.flagMenu.style.left = `${Math.round(Math.min(r.left, innerWidth - 240))}px`;
+  el.flagMenu.style.top = `${Math.round(r.bottom + 4)}px`;
+  el.flagMenu.hidden = false;
+  el.flagChip.setAttribute("aria-expanded", "true");
+  const note = el.flagMenu.querySelector(".flagnote");
+  if (note && !note.value) note.focus();
+}
+function closeFlagMenu() {
+  // A note being typed is kept, as if it had been confirmed.
+  const note = el.flagMenu.querySelector(".flagnote");
+  if (note && !el.flagMenu.hidden && note.value.trim() !== flagNote) setImageFlags(imageFlags, note.value);
+  el.flagMenu.hidden = true;
+  el.flagChip.setAttribute("aria-expanded", "false");
+}
+el.flagChip.addEventListener("click", () => (el.flagMenu.hidden ? openFlagMenu() : closeFlagMenu()));
+window.addEventListener("mousedown", (e) => {
+  if (!el.flagMenu.hidden && !e.target.closest("#flagMenu, #flagChip")) closeFlagMenu();
+}, true);
+el.flagMenu.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") { e.preventDefault(); closeFlagMenu(); el.flagChip.focus(); }
+});
+
+// ---------------------------------------------------------------- the run's exemplars
+//
+// The exemplar counter in the header ("7 in predtest") opens a window with
+// the run's exemplars: every one picked for it, cut out of its image as the
+// SAM 3 script pastes it (with a quarter of its size around it), in pick
+// order with its image and class - and, once the run has been made, which
+// of them it used. A run that sampled gt/ boxes instead shows those. A click
+// on an exemplar opens its image with the exemplar selected.
+
+function cropUrl(image, e, size = 160) {
+  return BASE + "api/crop/" + encodeURIComponent(image) + "?"
+    + new URLSearchParams({ project, cx: e.cx, cy: e.cy, w: e.w, h: e.h, pad: 0.25, size });
+}
+
+const sameExemplar = (a, b) => a.image === b.image
+  && ["cx", "cy", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 0.002);
+
+function exemCard(e, caption, badge, onOpen) {
+  const card = h("button", "ex-card" + (badge ? " " + badge.cls : ""));
+  card.type = "button";
+  card.title = `${e.image} \u2013 open it`;
+  const img = h("img");
+  img.alt = "";
+  img.loading = "lazy";
+  img.src = cropUrl(e.image, e);
+  card.append(img, h("span", "ex-cap", caption));
+  if (badge) card.appendChild(h("span", "ex-badge", badge.text));
+  card.addEventListener("click", onOpen);
+  return card;
+}
+
+function renderExemPanel(d) {
+  const frag = document.createDocumentFragment();
+  frag.appendChild(h("div", "fp-title", `Exemplars of ${d.run}`));
+  const last = d.last_run;
+  const fromManifest = last && last.source === "manifest";
+  let summary;
+  if (!last) {
+    summary = "Not run yet: these prompt the run's next start.";
+  } else {
+    const when = new Date(last.when).toLocaleString();
+    const where = fromManifest ? "from this list" : `drawn at random from gt/ (source: ${last.source})`;
+    summary = `Last run ${when}: ${plural(last.used.length, "exemplar", "exemplars")} used, ${where}`
+      + (last.class_name ? `, class ${last.class_name}` : "") + ".";
+  }
+  frag.appendChild(h("p", "fp-note", summary));
+
+  if (!d.picked.length) {
+    frag.appendChild(h("p", "fp-note", "None picked for this run yet: e, then draw a box, picks one."));
+  } else {
+    frag.appendChild(h("div", "ex-head", plural(d.picked.length, "exemplar picked", "exemplars picked")));
+    const grid = h("div", "ex-grid");
+    d.picked.forEach((e, k) => {
+      let badge = null;
+      if (fromManifest) {
+        badge = last.used.some((u) => sameExemplar(e, u))
+          ? { cls: "used", text: "used" }
+          : { cls: "unused", text: e.cls && last.class_name && e.cls !== last.class_name ? "other class" : "not used" };
+      }
+      const name = e.image.replace(/\.[^.]+$/, "");
+      grid.appendChild(exemCard(e, `${k + 1} \u00b7 ${name}${e.cls ? " \u00b7 " + e.cls : ""}`, badge, () => openExemplar(e)));
+    });
+    frag.appendChild(grid);
+  }
+  if (last && !fromManifest && last.used.length) {
+    frag.appendChild(h("div", "ex-head", "Used in the last run, from gt/"));
+    const grid = h("div", "ex-grid");
+    last.used.forEach((u, k) => {
+      grid.appendChild(exemCard(u, `${k + 1} \u00b7 ${u.image.replace(/\.[^.]+$/, "")}`,
+                                { cls: "used", text: "used" }, () => openExemplar(u)));
+    });
+    frag.appendChild(grid);
+  }
+  el.exemPanel.replaceChildren(frag);
+}
+
+async function openExemPanel() {
+  if (!run) { flash("Select a run to see its exemplars"); return; }
+  el.exemPanel.replaceChildren(h("p", "fp-note", "loading\u2026"));
+  el.exemPanel.hidden = false;
+  el.exemcount.setAttribute("aria-expanded", "true");
+  const r = el.exemcount.getBoundingClientRect();
+  el.exemPanel.style.top = `${Math.round(r.bottom + 6)}px`;
+  el.exemPanel.style.left = `${Math.round(Math.max(8, Math.min(r.left, innerWidth - 480)))}px`;
+  try {
+    const res = await fetch(q("api/run-exemplars"));
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    if (!el.exemPanel.hidden) renderExemPanel(await res.json());
+  } catch (err) {
+    el.exemPanel.replaceChildren(h("p", "fp-note", `Could not load the exemplars: ${err.message}`));
+  }
+}
+
+function closeExemPanel() {
+  el.exemPanel.hidden = true;
+  el.exemcount.setAttribute("aria-expanded", "false");
+}
+
+/** Open an exemplar's image and select it there, if it is a picked one. */
+async function openExemplar(e) {
+  closeExemPanel();
+  const i = images.findIndex((im) => im.name === e.image);
+  if (i < 0) { flash(`${e.image} is not in this project`); return; }
+  if (i !== idx || view !== "editor") await go(i);
+  if (e.id != null) {
+    const k = exems.findIndex((x) => x.id === e.id);
+    if (k >= 0) {
+      sel = { kind: "exem", i: k, picked: true };
+      multi = [];
+      render();
+    }
+  }
+}
+
+el.exemcount.addEventListener("click", () => (el.exemPanel.hidden ? openExemPanel() : closeExemPanel()));
+window.addEventListener("mousedown", (e) => {
+  if (!el.exemPanel.hidden && !e.target.closest("#exemPanel, #exemcount")) closeExemPanel();
+}, true);
+el.exemPanel.addEventListener("keydown", (e) => {
+  e.stopPropagation();
+  if (e.key === "Escape") { e.preventDefault(); closeExemPanel(); el.exemcount.focus(); }
+});
 
 // ---------------------------------------------------------------- small commands
 
@@ -5680,8 +6617,10 @@ function toggleMode() {
 }
 
 function escapeKey() {
+  if (!el.exemPanel.hidden) { closeExemPanel(); return; }
   if (!el.classMenu.hidden) { closeClassMenu(); return; }
   if (!el.stageMenu.hidden) { closeStageMenu(); return; }
+  if (!el.flagMenu.hidden) { closeFlagMenu(); return; }
   if (commentPlacing) { cancelCommentPlacement(); flash("No comment placed"); return; }
   if (openComment) { closeCommentPopup(); return; }
   if (marqueeArmed || marquee) { disarmMarquee(); render(); flash("Area select off"); return; }
@@ -5722,6 +6661,7 @@ function applyThreshold() {
     return;
   }
   threshold = parsed;
+  imageStatsChanged();               // the grid counts sam3 boxes at this threshold
   el.thresh.value = parsed.toFixed(2);
   el.thresh.classList.remove("bad");
   el.applyThresh.classList.remove("pending");
@@ -5926,6 +6866,7 @@ async function showProjects() {
     status("cannot list projects: " + err.message, true);
     return;
   }
+  renderProjectControls();
   renderProjects();
 }
 
@@ -5933,7 +6874,12 @@ function renderProjects() {
   const last = localStorage.getItem(K_PROJECT);
   const frag = document.createDocumentFragment();
 
-  for (const p of projects) {
+  const shown = visibleProjects();
+  if (!shown.length && projects.length) {
+    el.projectCards.replaceChildren(h("p", "empty", `No project name contains \u201c${el.projSearch.value.trim()}\u201d.`));
+    return;
+  }
+  for (const p of shown) {
     const card = h("a", "card");
     card.href = hashFor(p.name);
     if (p.name === last) card.classList.add("last");
@@ -5958,7 +6904,7 @@ function renderProjects() {
     title.appendChild(h("h2", "", p.name));
     if (p.name === last) title.appendChild(h("span", "tag last", "last opened"));
     if (p.name === defaultProject) title.appendChild(h("span", "tag", "in config"));
-    title.appendChild(h("span", "total", plural(p.images, "image", "images")));
+    title.appendChild(h("span", "total", `${plural(p.images, "image", "images")} \u00b7 ${plural(p.boxes || 0, "box", "boxes")}`));
 
     // One segment per stage, in the project's order and colours; the stats
     // name every stage with images in it.
@@ -5966,9 +6912,10 @@ function renderProjects() {
     const pct = (n) => (p.images ? (100 * n) / p.images : 0) + "%";
     const meter = h("div", "meter");
     const stats = h("div", "stats");
+    const lastStage = stages[stages.length - 1];
     for (const st of stages) {
       const n = counts[st.id] || 0;
-      if (!n) continue;
+      if (!n && st !== lastStage) continue;           // signed off is always shown
       const seg = h("span");
       seg.style.width = pct(n);
       seg.style.background = st.color;
@@ -5977,6 +6924,7 @@ function renderProjects() {
       const b = h("b", "", String(n));
       b.style.color = st.color;
       line.append(b, " " + st.name.toLowerCase());
+      if (st === lastStage) line.append(` (${Math.round(100 * signedOffShare(p))} %)`);
       stats.appendChild(line);
     }
     meter.title = stages.map((st) => `${counts[st.id] || 0} ${st.name.toLowerCase()}`).join(", ");
@@ -6015,12 +6963,18 @@ async function openProject(name) {
   gridSel.clear();
   gridAnchor = -1;
   filter = "all";              // stage ids are the project's own
+  loadContentFilter();
+  renderFilterButton();
+  closeFilterPanel();
+  statsStale = false;
   status("scanning image folder\u2026");
 
   try {
-    const r = await fetch(q("api/images"));
+    const r = await fetch(q("api/images", { min_score: threshold }));
     if (!r.ok) throw new Error(`api/images returned ${r.status}`);
     images = await r.json();
+    loadGridSort();
+    sortImages();
   } catch (err) {
     history.replaceState(null, "", "#/");
     await showProjects();
@@ -6047,6 +7001,8 @@ async function refreshExemplarSet() {
 
 function showDataset() {
   showView("dataset");
+  sortImages();                      // counts may have changed in the editor
+  if (statsStale) refreshImageStats();
   document.title = `${project} \u2014 annotator`;
   el.dsTitle.textContent = project;
   renderGrid();
@@ -6069,6 +7025,7 @@ function thumbTier() {
 }
 
 function renderGrid() {
+  renderFilterButton();              // the class list may have loaded since
   const needle = el.search.value.trim().toLowerCase();
   const stages = stageList();
   if (filter !== "all" && !stages.some((st) => st.id === filter)) filter = "all";
@@ -6078,6 +7035,7 @@ function renderGrid() {
 
   images.forEach((im, i) => {
     if (needle && !im.name.toLowerCase().includes(needle)) return;
+    if (!matchesContent(im)) return;
     const st = stageOf(im.stage);
     counts.all++;
     counts[st.id] = (counts[st.id] || 0) + 1;
@@ -6107,16 +7065,18 @@ function renderGrid() {
   const shown = el.grid.childElementCount;
   el.gridEmpty.hidden = shown > 0 || !images.length;
   if (!shown && images.length) {
-    el.gridEmpty.textContent = needle
-      ? `No image names contain \u201c${el.search.value.trim()}\u201d here. Clear the filter or pick another tab.`
-      : "No image is in this stage.";
+    el.gridEmpty.textContent = contentFilterCount()
+      ? "No image here matches the content filter. Change it, or pick another tab."
+      : needle
+        ? `No image names contain \u201c${el.search.value.trim()}\u201d here. Clear the filter or pick another tab.`
+        : "No image is in this stage.";
   }
 }
 
 function tile(im, i, st, size) {
-  const a = h("a", "tile" + (st.done ? " done" : ""));
+  const a = h("a", "tile" + (isFinal(st) ? " done" : ""));
   a.href = hashFor(project, im.name);
-  a.title = `${im.name} \u2013 ${st.name}`;
+  a.title = `${im.name} \u2013 ${st.name}\n${contentSummary(im)}`;
   a.dataset.name = im.name;
   a.style.setProperty("--c", st.color);
   if (im.name === lastOpened) a.classList.add("last");
@@ -6135,9 +7095,12 @@ function tile(im, i, st, size) {
   // Done with no boxes is a confirmed negative, which is worth saying out
   // loud: it is a training example, not a forgotten image.
   let chip = "";
-  if (st.done) chip = im.boxes ? "\u2713 " + plural(im.boxes, "box", "boxes") : "\u2713 negative";
+  if (isFinal(st)) chip = im.boxes ? "\u2713 " + plural(im.boxes, "box", "boxes") : "\u2713 negative";
   else if (im.boxes) chip = plural(im.boxes, "box", "boxes");
   if (chip) th.appendChild(h("span", "chip", chip));
+  if (im.flags && im.flags.length) {
+    th.appendChild(h("span", "fl", "\u2691 " + (im.flags.length === 1 ? flagLabel(im.flags[0]) : im.flags.length)));
+  }
 
   a.append(th, h("div", "bar"), h("div", "cap", im.name));
   return a;
@@ -6240,8 +7203,10 @@ function fillRuns() {
     the editor stays on the image you were looking at instead of jumping back
     to the first one. */
 async function runChanged() {
+  closeExemPanel();
   clearHistories();
   await refreshExemplarSet();
+  imageStatsChanged();               // sam3 and exemplar counts are per run
   if (view === "editor" && images[idx]) await load(idx);
 }
 
