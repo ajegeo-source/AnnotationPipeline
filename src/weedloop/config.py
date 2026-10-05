@@ -26,6 +26,10 @@ on its next run. Everything else is derived:
             composites/
             exemplar_tiles/            the crops actually pasted
             exemplars/<run>.json       the manifest that prompted this run
+            settings.yaml              what the run is made with (edited in the UI)
+            config.yaml                the complete config of its last launch
+            job.json, progress.json    the last launch: how, where, how far
+            logs/                      the output of each launch
             run_manifest.json
 
 The annotator keeps more project-scoped files next to annotations/ - its
@@ -166,6 +170,30 @@ class Run:
     @property
     def manifest_path(self) -> Path:
         return self.dir / "run_manifest.json"
+
+    @property
+    def settings_path(self) -> Path:
+        """What this run is made with: the run sections of the YAML, kept with
+        the run and edited in the annotator. See RunSettings."""
+        return self.dir / "settings.yaml"
+
+    @property
+    def config_path(self) -> Path:
+        """The complete config of the last launch, as the SAM 3 script read it."""
+        return self.dir / "config.yaml"
+
+    @property
+    def job_path(self) -> Path:
+        return self.dir / "job.json"
+
+    @property
+    def progress_path(self) -> Path:
+        """Written by the SAM 3 script as it goes: phase, images done, total."""
+        return self.dir / "progress.json"
+
+    @property
+    def logs_dir(self) -> Path:
+        return self.dir / "logs"
 
     def mkdirs(self) -> None:
         for d in (self.predictions_dir, self.overlays_dir, self.composites_dir,
@@ -332,6 +360,10 @@ class AnnotatorCfg(Base):
 
     host: str = "0.0.0.0"          # 127.0.0.1 is unreachable through the proxy
     port: int = Field(8000, ge=1, le=65535)
+    # Every request must carry the token printed at start-up (in the link it
+    # prints, then as a cookie). The OOD login only covers the proxy; the port
+    # itself is open to anyone who can reach the node.
+    require_token: bool = True
 
 
 class RunCfg(Base):
@@ -368,6 +400,33 @@ class StripCfg(Base):
     fill: tuple[int, int, int] = (114, 114, 114)
 
 
+class ClassRunCfg(Base):
+    """One class a run predicts: prompted with its own exemplars (those picked
+    as this class, or gt/ boxes of gt_class) and, optionally, its own text."""
+
+    name: str
+    text_prompt: str | None = None   # None: inference.text_prompt
+    n: int | None = Field(None, ge=1)   # exemplars for this class; None: exemplars.n
+    gt_class: str | None = None      # random_gt: the gt/ class to sample; None: see predict.py
+
+    @field_validator("name", mode="after")
+    @classmethod
+    def _one_word(cls, v: str) -> str:
+        if not valid_class_name(v):
+            raise ValueError(f"a class name is one word, at most {CLASS_NAME_MAX} characters: {v!r}")
+        return v
+
+    @field_validator("gt_class", mode="before")
+    @classmethod
+    def _gt_token(cls, v: Any) -> str | None:
+        if v is None or v == "":
+            return None
+        tok = class_token(str(v))
+        if tok is None:
+            raise ValueError(f"not a class: {v!r}")
+        return tok
+
+
 class InferenceCfg(Base):
     text_prompt: str | None = None
     # The class every prediction line of this run is written as - a name from
@@ -375,6 +434,9 @@ class InferenceCfg(Base):
     # annotator keeps it. Required by the SAM 3 script, ignored by the
     # annotator, hence optional here: the annotator validates this file too.
     class_name: str | None = None
+    # Several classes in one run: each prompted on its own, all written to the
+    # same prediction files. Use this or class_name, not both.
+    classes: list[ClassRunCfg] = Field(default_factory=list)
     conf_threshold: float = Field(0.1, ge=0.0, le=1.0)
     max_edge: int = Field(2048, ge=1)
     fast_prompt_append: bool = True
@@ -399,6 +461,25 @@ class InferenceCfg(Base):
             raise ValueError(f"a class name is one word, at most {CLASS_NAME_MAX} "
                              f"characters: {v!r}")
         return v
+
+    @model_validator(mode="after")
+    def _one_way(self) -> "InferenceCfg":
+        if self.classes and self.class_name:
+            raise ValueError("set inference.classes or inference.class_name, not both")
+        names = [c.name for c in self.classes]
+        if len(set(names)) != len(names):
+            raise ValueError(f"a class is listed twice in inference.classes: {names}")
+        return self
+
+    def run_classes(self) -> list[ClassRunCfg]:
+        """The classes this run predicts: inference.classes, or class_name as a
+        one-class list. Empty when neither is set."""
+        if self.classes:
+            return list(self.classes)
+        return [ClassRunCfg(name=self.class_name)] if self.class_name else []
+
+    def text_for(self, c: ClassRunCfg) -> str | None:
+        return c.text_prompt if c.text_prompt is not None else self.text_prompt
 
 
 class DatasetCfg(Base):
@@ -436,9 +517,40 @@ class DebugCfg(Base):
     draw_gt_boxes: bool = True
 
 
+class SlurmCfg(Base):
+    """How a run is submitted with sbatch. The setup lines run first in the job
+    - on Gamarello, what makes the SAM 3 environment usable in a batch job."""
+
+    partition: str | None = None
+    gres: str | None = "gpu:1"
+    cpus: int = Field(8, ge=1)
+    mem: str = "64G"
+    time: str = "04:00:00"
+    account: str | None = None
+    extra: list[str] = Field(default_factory=list)    # more #SBATCH options, e.g. "--qos=normal"
+    setup: list[str] = Field(default_factory=list)    # shell lines, e.g. "source ~/scripts/env.sh"
+
+
+class LauncherCfg(Base):
+    """How the annotator starts a SAM 3 run.
+
+    local: in the annotator's own session - on Gamarello, the salloc session
+      it runs in, on that GPU, at once; the run ends with the session.
+    slurm: a batch job of its own (see SlurmCfg), queued, independent of the
+      annotator and of the session.
+    """
+
+    mode: Literal["local", "slurm"] = "local"
+    # The SAM 3 script; None: this Python, -m weedloop.predictor.predict.
+    # --config <run>/config.yaml is appended.
+    command: list[str] | None = None
+    slurm: SlurmCfg = SlurmCfg()
+
+
 class Config(Base):
     paths: PathsCfg
     annotator: AnnotatorCfg = AnnotatorCfg()
+    launcher: LauncherCfg = LauncherCfg()
     run: RunCfg = RunCfg()
     exemplars: ExemplarCfg = ExemplarCfg()
     strip: StripCfg = StripCfg()
@@ -461,6 +573,73 @@ class Config(Base):
 
     def projects(self) -> list[str]:
         return Project.discover(self.paths.root)
+
+
+# --------------------------------------------------------------------------
+# Per-run settings. The YAML holds the defaults; a run made in the annotator
+# keeps its own copy of the run sections, edited there, and every launch
+# writes the complete config next to it - so a run folder says exactly what
+# it was made with, and a sweep is a duplicated run with one setting changed.
+# --------------------------------------------------------------------------
+
+
+class RunSettings(Base):
+    overwrite: bool = True
+    exemplars: ExemplarCfg = ExemplarCfg()
+    strip: StripCfg = StripCfg()
+    inference: InferenceCfg = InferenceCfg()
+    dataset: DatasetCfg = DatasetCfg()
+    predictions: PredictionCfg = PredictionCfg()
+    debug: DebugCfg = DebugCfg()
+
+    @classmethod
+    def from_config(cls, cfg: "Config") -> "RunSettings":
+        """The YAML's run sections, as a starting point for a run."""
+        return cls(overwrite=cfg.run.overwrite, exemplars=cfg.exemplars, strip=cfg.strip,
+                   inference=cfg.inference, dataset=cfg.dataset,
+                   predictions=cfg.predictions, debug=cfg.debug)
+
+
+def read_run_settings(cfg: "Config", run: Run) -> tuple[RunSettings, bool]:
+    """The run's settings, and whether they are its own (True) or still the
+    YAML's (False: nothing saved for this run yet)."""
+    if run.settings_path.is_file():
+        raw = yaml.safe_load(run.settings_path.read_text(encoding="utf-8")) or {}
+        return RunSettings.model_validate(raw), True
+    return RunSettings.from_config(cfg), False
+
+
+def _dump_yaml(data: dict, path: Path, header: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(header + yaml.safe_dump(data, sort_keys=False, allow_unicode=True),
+                   encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_run_settings(run: Run, settings: RunSettings) -> None:
+    _dump_yaml(settings.model_dump(mode="json"), run.settings_path,
+               f"# Settings of run {run.name}, edited in the annotator.\n"
+               "# Same sections as the YAML; launching writes config.yaml from these.\n")
+
+
+def config_for_run(cfg: "Config", project: Project, run: Run, settings: RunSettings) -> "Config":
+    """The complete config a launch runs with: paths, annotator and launcher
+    from the YAML, this project as the dataset, this run, its own settings."""
+    return Config(
+        paths=PathsCfg(root=cfg.paths.root, dataset=project.name),
+        annotator=cfg.annotator, launcher=cfg.launcher,
+        run=RunCfg(name=run.name, overwrite=settings.overwrite),
+        exemplars=settings.exemplars, strip=settings.strip, inference=settings.inference,
+        dataset=settings.dataset, predictions=settings.predictions, debug=settings.debug,
+    )
+
+
+def write_config(config: "Config", path: Path, note: str = "") -> None:
+    _dump_yaml(config.model_dump(mode="json"), path,
+               "# The complete config of this run's last launch. Written by the\n"
+               "# annotator; edit settings.yaml (or the run's settings in the UI).\n"
+               + (f"# {note}\n" if note else ""))
 
 
 def load_config(path: str | Path) -> Config:

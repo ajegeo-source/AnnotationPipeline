@@ -122,6 +122,11 @@ Run:
 from __future__ import annotations
 
 import argparse
+import secrets
+import shlex
+import signal
+import subprocess
+import sys
 import getpass
 import hashlib
 import io
@@ -131,6 +136,7 @@ import re
 import shutil
 import socket
 import threading
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,8 +149,9 @@ from PIL import Image, ImageOps
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from importlib.resources import files
 
-from weedloop.config import (CLASS_NAME_MAX, IMAGE_SUFFIXES, Config, Project, Run,
-                             class_token, load_config, valid_class_name)
+from weedloop.config import (CLASS_NAME_MAX, IMAGE_SUFFIXES, Config, Project, Run, RunSettings,
+                             class_token, config_for_run, load_config, read_run_settings,
+                             valid_class_name, write_config, write_run_settings)
 
 # --------------------------------------------------------------------------
 # Format constants. Everything path-shaped now lives in ConfigSam3.
@@ -183,7 +190,7 @@ EVENT_TYPES = frozenset({
     "box.draw", "box.edit", "box.delete",
     "pred.approve", "pred.adjust", "pred.reject",
     "exemplar.pick", "exemplar.drop",
-    "box.class", "box.paste", "image.stage", "image.flags",
+    "box.class", "box.paste", "image.stage", "image.flags", "run.launch", "run.cancel",
     "comment.add", "comment.edit", "comment.delete", "class.rename",
     "history.undo", "history.redo",
 })
@@ -206,6 +213,60 @@ async def strip_proxy_prefix(request, call_next):
     if path.startswith(prefix):
         request.scope["path"] = path[len(prefix):] or "/"
     return await call_next(request)
+
+
+# The access token. The OOD login covers the proxy, not the port: anyone who
+# can reach the node can open http://<node>:<port>/ directly. So every request
+# must carry the token - once in the link printed at start-up, from then on as
+# a cookie. Kept in the personal config folder, so restarts keep it valid;
+# WEEDLOOP_TOKEN overrides it (tests).
+TOKEN_FILE = "token"
+
+
+def access_token() -> str:
+    env = os.environ.get("WEEDLOOP_TOKEN", "").strip()
+    if env:
+        return env
+    path = settings_path().parent / TOKEN_FILE
+    try:
+        token = path.read_text().strip()
+        if len(token) >= 20:
+            return token
+    except OSError:
+        pass
+    token = secrets.token_urlsafe(24)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(token + "\n")
+        path.chmod(0o600)
+    except OSError as exc:
+        print(f"[warn] could not keep the access token in {path} ({exc}); "
+              f"it changes with every start")
+    return token
+
+
+NO_TOKEN_PAGE = """<!doctype html><meta charset="utf-8"><title>annotator</title>
+<body style="font: 15px/1.5 system-ui; background: #14161a; color: #e6e6e6; padding: 48px">
+<h2 style="font-weight: 600">This annotator needs its access link</h2>
+<p>Open the link <code>weedloop-annotate</code> printed when it started - the one ending in
+<code>?token=&hellip;</code>. Your browser remembers it after that.</p></body>"""
+
+
+@app.middleware("http")
+async def require_token(request, call_next):
+    token = getattr(request.app.state, "token", None)
+    if not token:
+        return await call_next(request)
+    name = f"weedloop_{request.app.state.cfg.annotator.port}"
+    given = request.query_params.get("token", "")
+    if given and secrets.compare_digest(given, token):
+        response = await call_next(request)
+        response.set_cookie(name, token, httponly=True, samesite="strict",
+                            max_age=90 * 24 * 3600)
+        return response
+    if secrets.compare_digest(request.cookies.get(name, ""), token):
+        return await call_next(request)
+    return HTMLResponse(NO_TOKEN_PAGE, status_code=401)
 
 
 # Image dimensions, keyed by (project, filename). The project half matters:
@@ -1449,6 +1510,357 @@ def create_run(project: ProjectDep, run: str) -> dict:
     return {"project": project.name, "run": r.name, "created": not existed}
 
 
+# --------------------------------------------------------------------------
+# A run's settings, and launching it. See config.RunSettings: the YAML holds
+# the defaults, each run its own copy (runs/<run>/settings.yaml); a launch
+# writes the complete config (config.yaml) and starts the SAM 3 script with it
+# - in this session (launcher.mode: local) or as a Slurm job (slurm). The
+# launch is recorded in job.json; the script reports into progress.json and
+# logs/<job>.log, which is all the status below reads, so a restarted
+# annotator still sees a run it started.
+# --------------------------------------------------------------------------
+
+def _need_run(run: Run | None) -> Run:
+    if run is None:
+        raise HTTPException(422, "no run selected")
+    return run
+
+
+def _ensure_run_dir(project: Project, r: Run) -> None:
+    existed = r.exists
+    r.mkdirs()
+    if not existed:
+        (r.dir / "run.json").write_text(json.dumps({
+            "name": r.name, "project": project.name,
+            "created": now(), "created_by": "annotator"}, indent=2) + "\n")
+
+
+@app.get("/api/run/settings")
+def get_run_settings(project: ProjectDep, run: RunDep, cfg: CfgDep, defaults: bool = False) -> dict:
+    """The run's settings - its own if saved, else the YAML's - or, with
+    defaults=true, the YAML's whatever the run has."""
+    r = _need_run(run)
+    try:
+        settings, own = ((RunSettings.from_config(cfg), False) if defaults
+                         else read_run_settings(cfg, r))
+    except (ValueError, OSError) as exc:
+        raise HTTPException(422, f"{r.settings_path.name} could not be read: {exc}") from exc
+    return {"settings": settings.model_dump(mode="json"), "own": own,
+            "classes_known": project.class_names(), "gt": project.gt_dir is not None,
+            "launcher": cfg.launcher.mode}
+
+
+@app.put("/api/run/settings")
+def put_run_settings(project: ProjectDep, run: RunDep, settings: RunSettings) -> dict:
+    r = _need_run(run)
+    _ensure_run_dir(project, r)
+    write_run_settings(r, settings)
+    return {"settings": settings.model_dump(mode="json"), "own": True}
+
+
+@app.post("/api/run/duplicate")
+def duplicate_run(project: ProjectDep, run: RunDep, cfg: CfgDep, to: str) -> dict:
+    """A new run with this one's settings and exemplars - a sweep is a
+    duplicate with one setting changed. Nothing of the outputs is copied."""
+    src = _need_run(run)
+    try:
+        dst = project.run(to)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    if dst.exists:
+        raise HTTPException(409, f"there is already a run called {dst.name}")
+    settings, _ = read_run_settings(cfg, src)
+    _ensure_run_dir(project, dst)
+    write_run_settings(dst, settings)
+    copied = 0
+    if src.exemplar_manifest.is_file():
+        s = read_exemplar_set(project, src)
+        s.name, s.created, s.updated = dst.name, now(), now()
+        write_exemplar_set(dst, s)
+        copied = len(s.exemplars)
+    return {"run": dst.name, "exemplars": copied}
+
+
+def _read_json(path: Path) -> dict | None:
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+
+
+def _write_json(path: Path, data: dict) -> None:
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_text(json.dumps(data, indent=2))
+    tmp.replace(path)
+
+
+_procs: dict[str, subprocess.Popen] = {}       # launches of this server: job id -> process
+_launch_lock = threading.Lock()
+
+
+def _pid_alive(pid: int, marker: str) -> bool:
+    """Is the process still there, and still the one launched (not a new
+    process that got the same id)?"""
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    try:
+        cmd = Path(f"/proc/{pid}/cmdline").read_bytes().replace(b"\0", b" ").decode(errors="replace")
+        return marker in cmd
+    except OSError:
+        return True
+
+
+def _run_cmd(args: list[str], env=None, timeout=20) -> subprocess.CompletedProcess | None:
+    try:
+        return subprocess.run(args, capture_output=True, text=True, timeout=timeout, env=env)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+
+
+def _slurm_state(job_id: str) -> str | None:
+    out = _run_cmd(["squeue", "-h", "-j", job_id, "-o", "%T"])
+    if out and out.returncode == 0 and out.stdout.strip():
+        return out.stdout.split()[0]
+    out = _run_cmd(["sacct", "-n", "-X", "-P", "-j", job_id, "-o", "State"])
+    if out and out.returncode == 0 and out.stdout.strip():
+        return out.stdout.split()[0]
+    return None
+
+
+def job_state(run: Run, job: dict) -> str:
+    """queued, running, cancelling, done, failed, cancelled - or stopped: it
+    ended without saying how (killed, or the session it ran in ended)."""
+    progress = _read_json(run.progress_path) or {}
+    cancelled = bool(job.get("cancelled"))
+    if job.get("mode") == "slurm":
+        st = _slurm_state(str(job.get("slurm_id", "")))
+        if st in ("PENDING", "CONFIGURING", "REQUEUED", "SUSPENDED"):
+            return "cancelling" if cancelled else "queued"
+        if st in ("RUNNING", "COMPLETING", "STAGE_OUT"):
+            return "cancelling" if cancelled else "running"
+        if st and st.startswith("CANCELLED"):
+            return "cancelled"
+        if st in ("FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "PREEMPTED", "BOOT_FAIL", "DEADLINE"):
+            return "failed"
+    else:
+        p = _procs.get(job.get("id", ""))
+        alive = p.poll() is None if p else _pid_alive(int(job.get("pid", 0)), str(run.config_path))
+        if alive:
+            return "cancelling" if cancelled else "running"
+    if cancelled:
+        return "cancelled"
+    phase = progress.get("phase")
+    if phase == "done":
+        return "done"
+    if phase == "failed":
+        return "failed"
+    return "stopped"
+
+
+def _log_tail(path: Path, n: int = 80) -> list[str]:
+    """The end of a launch's output. Progress bars rewrite their line with
+    carriage returns; each rewrite counts as a line here."""
+    try:
+        with path.open("rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 64_000))
+            text = f.read().decode(errors="replace")
+    except OSError:
+        return []
+    lines = [ln for ln in re.split(r"[\r\n]+", text) if ln.strip()]
+    # Of a run of progress-bar rewrites ("images:  25%|##  | 1/4 [...]"), only
+    # the latest is worth showing.
+    bar = re.compile(r"^(.*?):\s*\d+%\|")
+    out: list[str] = []
+    for ln in lines:
+        m, prev = bar.match(ln), bar.match(out[-1]) if out else None
+        if m and prev and m.group(1) == prev.group(1):
+            out[-1] = ln
+        else:
+            out.append(ln)
+    return out[-n:]
+
+
+_alloc_cache: dict[str, tuple[float, dict | None]] = {}
+
+
+def allocation() -> dict | None:
+    """The Slurm allocation this annotator runs in (the salloc session), and
+    how long it has left - a local launch ends with it."""
+    job = os.environ.get("SLURM_JOB_ID")
+    if not job:
+        return None
+    hit = _alloc_cache.get(job)
+    if hit and time.time() - hit[0] < 30:
+        return hit[1]
+    info = {"job": job, "left": None, "left_s": None}
+    out = _run_cmd(["squeue", "-h", "-j", job, "-o", "%L"])
+    if out and out.returncode == 0 and out.stdout.strip():
+        left = out.stdout.split()[0]
+        info["left"] = left
+        m = re.fullmatch(r"(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)", left)
+        if m:
+            d, hh, mm, ss = (int(v or 0) for v in m.groups())
+            info["left_s"] = ((d * 24 + hh) * 60 + mm) * 60 + ss
+    _alloc_cache[job] = (time.time(), info)
+    return info
+
+
+def run_status(run: Run, cfg: Config) -> dict:
+    job = _read_json(run.job_path)
+    state = job_state(run, job) if job else None
+    return {
+        "job": job, "state": state,
+        "progress": _read_json(run.progress_path) if job else None,
+        "log": _log_tail(run.logs_dir / job["log"]) if job and job.get("log") else [],
+        "mode": cfg.launcher.mode,
+        "allocation": allocation() if cfg.launcher.mode == "local" else None,
+    }
+
+
+@app.get("/api/run/job")
+def get_run_job(run: RunDep, cfg: CfgDep) -> dict:
+    return run_status(_need_run(run), cfg)
+
+
+def preflight(project: Project, run: Run, settings: RunSettings) -> tuple[list[str], list[str]]:
+    """What stops a launch, and what is only worth a warning."""
+    problems, warnings = [], []
+    classes = settings.inference.run_classes()
+    if not classes:
+        problems.append("no class to predict: add one in the run's settings")
+    if settings.exemplars.source == "manifest":
+        entries = read_exemplar_set(project, run).exemplars if run.exemplar_manifest.is_file() else []
+        for c in classes:
+            n = sum(1 for e in entries
+                    if e.cls == c.name or (len(classes) == 1 and e.cls is None))
+            if not n:
+                problems.append(f"no exemplars picked as {c.name}: pick some (e, then a box), "
+                                f"or sample gt/ boxes instead")
+    elif project.gt_dir is None:
+        problems.append(f"exemplars from gt/, but {project.name} has no gt/ folder")
+    known = project.class_names()
+    if known is not None:
+        for c in classes:
+            if c.name not in known:
+                warnings.append(f"{c.name} is not on the project's class list: approved "
+                                f"predictions would take the class being drawn with")
+    return problems, warnings
+
+
+def slurm_script(cfg: Config, run: Run, cmd: list[str], log: Path) -> str:
+    sc = cfg.launcher.slurm
+    name = re.sub(r"[^A-Za-z0-9_.-]+", "_", f"weedloop-{run.name}")
+    lines = ["#!/bin/bash", f"#SBATCH --job-name={name}", f"#SBATCH --output={log}",
+             f"#SBATCH --cpus-per-task={sc.cpus}", f"#SBATCH --mem={sc.mem}",
+             f"#SBATCH --time={sc.time}"]
+    if sc.partition:
+        lines.append(f"#SBATCH --partition={sc.partition}")
+    if sc.gres:
+        lines.append(f"#SBATCH --gres={sc.gres}")
+    if sc.account:
+        lines.append(f"#SBATCH --account={sc.account}")
+    lines += [f"#SBATCH {x}" for x in sc.extra]
+    lines += [
+        "",
+        "# Written by the annotator for this launch; see the run's config.yaml.",
+        "set -eo pipefail",
+        f'export HOME="${{HOME:-{Path.home()}}}"        # batch jobs can start without one',
+        "unset SLURM_MEM_PER_CPU",
+        "export PYTHONUNBUFFERED=1",
+        *sc.setup,
+        "exec " + " ".join(shlex.quote(c) for c in cmd),
+        "",
+    ]
+    return "\n".join(lines)
+
+
+@app.post("/api/run/launch")
+def launch_run(project: ProjectDep, run: RunDep, cfg: CfgDep, confirm: bool = False) -> dict:
+    """Start the run. Refused while it is already running, when something
+    would make it fail at once, and - unless confirmed - when it would
+    overwrite predictions it already has."""
+    r = _need_run(run)
+    with _launch_lock:
+        old = _read_json(r.job_path)
+        if old and job_state(r, old) in ("queued", "running", "cancelling"):
+            raise HTTPException(409, f"{r.name} is still running")
+        try:
+            settings, _ = read_run_settings(cfg, r)
+        except (ValueError, OSError) as exc:
+            raise HTTPException(422, f"{r.settings_path.name} could not be read: {exc}") from exc
+        problems, warnings = preflight(project, r, settings)
+        if problems:
+            raise HTTPException(422, problems)
+        n_pred = sum(1 for _ in r.predictions_dir.glob("*.txt")) if r.predictions_dir.is_dir() else 0
+        if settings.overwrite and n_pred and not confirm:
+            raise HTTPException(409, {"confirm": f"{r.name} has predictions for {n_pred} "
+                                                f"image(s); launching replaces them"})
+        _ensure_run_dir(project, r)
+        write_config(config_for_run(cfg, project, r, settings), r.config_path,
+                     note=f"launched {now()} by {ACTOR}")
+        job_id = datetime.now().strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:4]
+        r.logs_dir.mkdir(parents=True, exist_ok=True)
+        log = r.logs_dir / f"{job_id}.log"
+        _write_json(r.progress_path, {"phase": "queued", "done": 0, "total": 0,
+                                      "updated": time.time()})
+        cmd = [*(cfg.launcher.command or [sys.executable, "-m", "weedloop.predictor.predict"]),
+               "--config", str(r.config_path)]
+        job = {"id": job_id, "mode": cfg.launcher.mode, "log": log.name, "started": now(),
+               "by": ACTOR, "command": cmd}
+        if cfg.launcher.mode == "local":
+            with log.open("ab") as out:
+                p = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
+                                     stdin=subprocess.DEVNULL, cwd=str(r.dir),
+                                     start_new_session=True,      # survives the annotator
+                                     env={**os.environ, "PYTHONUNBUFFERED": "1"})
+            _procs[job_id] = p
+            job["pid"] = p.pid
+        else:
+            script = r.dir / "job.sh"
+            script.write_text(slurm_script(cfg, r, cmd, log))
+            # sbatch from inside a Slurm session would take that session's
+            # settings with it (memory, cpus, ...): the job gets a clean slate.
+            env = {k: v for k, v in os.environ.items()
+                   if not k.startswith(("SLURM_", "SBATCH_", "SALLOC_", "SRUN_"))}
+            out = _run_cmd(["sbatch", "--parsable", str(script)], env=env, timeout=60)
+            if out is None or out.returncode != 0:
+                msg = out.stderr.strip() if out else "sbatch could not be run"
+                _write_json(r.progress_path, {"phase": "failed", "message": msg, "updated": time.time()})
+                raise HTTPException(502, f"sbatch refused the job: {msg}")
+            job["slurm_id"] = out.stdout.strip().split(";")[0]
+        _write_json(r.job_path, job)
+    log_server_event(project, "run.launch", None,
+                     {"run": r.name, "job": job_id, "mode": job["mode"],
+                      "slurm_id": job.get("slurm_id"),
+                      "classes": [c.name for c in settings.inference.run_classes()]})
+    return {**run_status(r, cfg), "warnings": warnings}
+
+
+@app.post("/api/run/cancel")
+def cancel_run(project: ProjectDep, run: RunDep, cfg: CfgDep) -> dict:
+    r = _need_run(run)
+    job = _read_json(r.job_path)
+    if not job or job_state(r, job) not in ("queued", "running"):
+        raise HTTPException(409, f"{r.name} is not running")
+    if job["mode"] == "slurm":
+        out = _run_cmd(["scancel", str(job["slurm_id"])])
+        if out is None or out.returncode != 0:
+            raise HTTPException(502, f"scancel failed: {out.stderr.strip() if out else 'not found'}")
+    else:
+        try:
+            os.killpg(int(job["pid"]), signal.SIGTERM)   # its own session: the whole run
+        except (ProcessLookupError, PermissionError):
+            pass
+    job["cancelled"] = now()
+    _write_json(r.job_path, job)
+    log_server_event(project, "run.cancel", None, {"run": r.name, "job": job["id"]})
+    time.sleep(0.3)
+    return run_status(r, cfg)
+
+
 @app.delete("/api/run")
 def delete_run(project: ProjectDep, run: str, confirm: str = "") -> dict:
     """Delete a run and everything inside it.
@@ -1468,6 +1880,9 @@ def delete_run(project: ProjectDep, run: str, confirm: str = "") -> dict:
         raise HTTPException(422, str(exc)) from exc
     if confirm != r.name:
         raise HTTPException(422, "confirm must repeat the run name")
+    job = _read_json(r.job_path) if r.exists else None
+    if job and job_state(r, job) in ("queued", "running", "cancelling"):
+        raise HTTPException(409, f"{r.name} is running; cancel it first")
     if not r.exists:
         raise HTTPException(404, f"no such run: {r.name}")
     if r.dir.is_symlink():
@@ -2041,13 +2456,20 @@ def get_exemplar_set(project: ProjectDep, run: RunDep) -> dict:
 
 
 @app.get("/api/run-exemplars")
-def get_run_exemplars(project: ProjectDep, run: RunDep) -> dict:
+def get_run_exemplars(project: ProjectDep, run: RunDep, request: Request) -> dict:
     """The run's exemplars, for the header's exemplar window: every one picked
     for it, in pick order, and - when the run has been made - which it used
     (from run_manifest.json; a run that sampled gt/ boxes used those)."""
     if run is None:
-        return {"run": None, "picked": [], "last_run": None}
+        return {"run": None, "picked": [], "last_run": None, "wanted": []}
     picked = [e.model_dump() for e in read_exemplar_set(project, run).exemplars]
+    try:
+        settings, _ = read_run_settings(request.app.state.cfg, run)
+        wanted = [{"name": c.name, "n": c.n or settings.exemplars.n}
+                  for c in settings.inference.run_classes()]
+        source = settings.exemplars.source
+    except (ValueError, OSError):
+        wanted, source = [], None
     last = None
     try:
         m = json.loads(run.manifest_path.read_text(encoding="utf-8"))
@@ -2056,12 +2478,13 @@ def get_run_exemplars(project: ProjectDep, run: RunDep) -> dict:
             "when": when.isoformat(timespec="seconds"),
             "source": m.get("exemplar_source"),
             "class_name": m.get("class_name"),
-            "used": [{"image": e.get("source"), "cx": b[0], "cy": b[1], "w": b[2], "h": b[3]}
+            "used": [{"image": e.get("source"), "cls": e.get("class") or m.get("class_name"),
+                      "cx": b[0], "cy": b[1], "w": b[2], "h": b[3]}
                      for e in m.get("exemplars", []) if len(b := e.get("box_cxcywh_norm") or []) == 4],
         }
     except (OSError, ValueError):
         pass                                 # not run yet, or a manifest it cannot read
-    return {"run": run.name, "picked": picked, "last_run": last}
+    return {"run": run.name, "picked": picked, "last_run": last, "wanted": wanted, "source": source}
 
 
 CROP_SIZES = (96, 160, 320)
@@ -2157,6 +2580,25 @@ def add_exemplar(project: ProjectDep, run: RunDep, name: str, box: Box) -> dict:
     return {"id": entry.id, "set": s.name, "count": len(s.exemplars)}
 
 
+class ExemplarOrder(BaseModel):
+    ids: list[int]
+
+
+@app.post("/api/exemplars/order")
+def order_exemplars(project: ProjectDep, run: RunDep, order: ExemplarOrder) -> dict:
+    """Put the exemplars in this order - "the first n" of a class are the ones
+    a run uses. Ids not listed keep their order, after the listed ones."""
+    r = _need_run(run)
+    s = read_exemplar_set(project, r)
+    by_id = {e.id: e for e in s.exemplars}
+    first = [by_id[i] for i in order.ids if i in by_id]
+    rest = [e for e in s.exemplars if e.id not in set(order.ids)]
+    s.exemplars = first + rest
+    s.updated = now()
+    write_exemplar_set(r, s)
+    return {"count": len(s.exemplars)}
+
+
 @app.delete("/api/exemplar/{exemplar_id}")
 def drop_exemplar(project: ProjectDep, run: RunDep, exemplar_id: int) -> dict:
     """Un-pick a box. The annotation it created stays; it is still a real plant."""
@@ -2200,8 +2642,15 @@ def main(cfg: Config):
               f"under root; the UI will open on whatever you pick instead")
 
     port = cfg.annotator.port
+    app.state.token = access_token() if cfg.annotator.require_token else None
+    query = f"?token={app.state.token}" if app.state.token else ""
     print(f"open: https://ondemand.gamarello.agsad.admin.ch"
-          f"/node/{socket.gethostname()}/{port}/")
+          f"/node/{socket.gethostname()}/{port}/{query}")
+    if app.state.token:
+        print("      (the token is remembered by the browser after the first visit)")
+    else:
+        print("[warn] annotator.require_token is off: anyone who can reach this "
+              "node's port can use the annotator, and launch runs")
     # One worker on purpose. Any index added later is a single-writer design,
     # and $HOME is NFS.
     uvicorn.run(app, host=cfg.annotator.host, port=port, log_level="warning")

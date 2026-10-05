@@ -10,12 +10,43 @@
 #
 # Anything in this file changes what lands on disk, so the resolved contents are
 # copied into run_manifest.json next to the outputs.
+#
+# Runs made in the annotator keep their own copy of the run sections (run,
+# exemplars, strip, inference, dataset, predictions, debug) in
+# <project>/runs/<run>/settings.yaml, edited in the run's window there; this
+# file is where those start from. Launching from the annotator writes the
+# complete config to <run>/config.yaml and starts the SAM 3 script with it.
 paths:
   root: $HOME/Datasets/ActiveLearningTestDatasets
   dataset: Project3          # SAM 3's target; must be a folder under root
 annotator:
   host: 0.0.0.0
   port: 8000
+  require_token: true         # every request needs the token in the link printed
+                              # at start-up; the OOD login covers the proxy, not
+                              # the node's port. Off only on a machine of your own.
+launcher:
+  mode: local                 # local: in the annotator's own session (your salloc
+                              #   session on the GPU node), at once; the run ends
+                              #   when the session does.
+                              # slurm: a batch job of its own (below), queued; it
+                              #   keeps going without the annotator or the session.
+  command: null               # null: the annotator's Python, -m weedloop.predictor.predict
+  slurm:
+    partition: gpu
+    gres: "gpu:1"
+    cpus: 4
+    mem: 32G
+    time: "04:00:00"
+    account: null
+    extra: []                 # more #SBATCH options, e.g. ["--qos=normal"]
+    setup:                    # runs first in the job: what `agrosoft load` and
+                              # your session do, which a batch job lacks
+      # - source <the Lmod init script under /agrosoft/spack/2026.1/...>
+      # - module use <the stack's Core folder (zen3-cuda-eth-ubuntu24)>
+      - module load python/3.12.12 cuda/12.9.1
+      - source $HOME/envs/SamSeg/bin/activate
+      - export HF_HUB_OFFLINE=1     # compute nodes have no internet
 run:
   name: BirdTester     # the run subdirectory under <project>/runs/
   overwrite: true
@@ -35,6 +66,11 @@ inference:
                               # word, and a class on the project's list in the
                               # annotator, so approving a prediction keeps it.
                               # A manifest run uses only exemplars of this class.
+  # Several classes in one run instead of class_name - each prompted on its
+  # own (its exemplars, its text), all written to the same predictions:
+  # classes:
+  #   - {name: rumex, text_prompt: rumex}
+  #   - {name: taraxacum, text_prompt: dandelion, n: 8}   # n: its own exemplar count
   conf_threshold: 0.05         # written to disk; the UI filters higher, not this
   max_edge: 2048              # cap the TARGET's long edge before compositing
   fast_prompt_append: true

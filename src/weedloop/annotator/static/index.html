@@ -432,6 +432,69 @@
     font: 11px/1.5 var(--mono); color: #0d1114; background: #f5f5f4;
   }
   .fp-flag { padding-left: 8px; }
+  /* ------------------------------------------------ runs */
+  .runstate {
+    padding: 1px 8px; border-radius: 2px; border: 1px solid var(--line); background: var(--bg);
+    font: 12px/1.6 var(--mono); color: var(--dim); cursor: pointer;
+  }
+  .runstate[hidden] { display: none; }
+  .runstate[data-state="queued"], .runstate[data-state="running"], .runstate[data-state="cancelling"] {
+    color: #0d1114; background: #8ecbff; border-color: #8ecbff;
+  }
+  .runstate[data-state="done"] { color: var(--done); border-color: var(--done); }
+  .runstate[data-state="failed"], .runstate[data-state="stopped"] { color: #ff6b6b; border-color: #ff6b6b; }
+  .badge.primary { color: #0d1114; background: var(--human); border-color: var(--human); }
+  .badge.primary:disabled { opacity: .5; }
+  .rundialog { width: min(760px, 94vw); }
+  .rl { padding: 10px 12px; margin-bottom: 14px; border: 1px solid var(--line); border-radius: 3px; background: var(--bg); }
+  .rl-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+  .rl-state { font-weight: 600; }
+  .rl-state.failed, .rl-state.stopped { color: #ff6b6b; }
+  .rl-state.done { color: var(--done); }
+  .rl-meta { color: var(--dim); font-size: 12px; }
+  .rl-bar { height: 6px; margin: 9px 0 2px; background: var(--line); border-radius: 3px; overflow: hidden; }
+  .rl-bar span { display: block; height: 100%; background: #8ecbff; transition: width .4s; }
+  .rl-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin-top: 10px; }
+  .rl-where { color: var(--dim); font-size: 12px; flex: 1; min-width: 240px; }
+  .rl-where.warn, .rf-note.warn, .fp-note.warn, .run-status .warn { color: #ffb01f; }
+  .rl-log summary { cursor: pointer; color: var(--dim); font-size: 12px; margin-top: 10px; }
+  .rl-log pre {
+    max-height: 220px; overflow: auto; margin: 6px 0 0; padding: 8px 10px; background: #0d0f12;
+    border: 1px solid var(--line); border-radius: 2px; font: 11px/1.45 var(--mono); color: var(--text);
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .rf-sec { margin: 4px 0 16px; }
+  .rf-sec h4 { margin: 0 0 8px; font-size: 13px; }
+  .rf-note { margin: 0 0 8px; color: var(--dim); font-size: 12px; line-height: 1.45; }
+  .rf-row { display: grid; grid-template-columns: 120px auto 1fr; align-items: center; gap: 4px 12px; margin: 6px 0; }
+  .rf-label { color: var(--text); font-size: 12px; }
+  .rf-hint { color: var(--dim); font-size: 12px; }
+  .rundialog .rf-num { width: 84px; padding: 3px 6px; font: 12px var(--mono); box-sizing: border-box; }
+  .rf-text { width: 100%; box-sizing: border-box; padding: 3px 7px; font-size: 12px; }
+  .rf-check { margin: 6px 0; }
+  .rf-triple { display: inline-flex; gap: 4px; }
+  .rundialog .rf-triple .rf-num { width: 58px; }
+  .rf-classes { border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; }
+  .rf-crow { display: grid; grid-template-columns: 150px 1fr 84px 110px 30px; align-items: center; gap: 8px; padding: 4px 0; }
+  .rf-chead { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .rf-cname { display: inline-flex; align-items: center; gap: 7px; font: 12px var(--mono); }
+  .rf-cname i { width: 10px; height: 10px; border-radius: 2px; }
+  .rf-picked { color: var(--dim); font: 12px var(--mono); }
+  .rf-picked.none { color: #ffb01f; }
+  .rf-cadd { margin-top: 6px; }
+  .rf-adv summary { cursor: pointer; color: var(--dim); font-size: 12px; margin: 4px 0 8px; }
+  .run-status { font-size: 12px; max-width: 46%; }
+  .run-own { color: var(--dim); font-size: 12px; }
+  /* the exemplar window: per class, with order and un-pick */
+  .ex-head { display: flex; align-items: center; gap: 7px; }
+  .ex-head i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+  .ex-card { cursor: default; }
+  .ex-open { display: flex; flex-direction: column; gap: 4px; padding: 0; border: 0; background: none;
+             color: inherit; text-align: left; cursor: pointer; }
+  .ex-actions { display: flex; gap: 4px; margin-top: 2px; }
+  .ex-actions .badge { padding: 0 6px; }
+  .ex-card.beyond img { opacity: .4; }
+  .ex-card.beyond .ex-cap::after { content: " \00b7 beyond n"; }
   /* ------------------------------------------------ the run's exemplars */
   button.exemcount { background: none; border: 0; padding: 0 2px; font: inherit; cursor: pointer; }
   button.exemcount:hover, button.exemcount[aria-expanded="true"] { text-decoration: underline; }
@@ -748,6 +811,8 @@
       <select id="runSel" class="picker" title="run &mdash; drives predictions and exemplars"></select>
       <button class="badge danger" id="delRun"
               title="delete the selected run and everything in it">&#10005;</button>
+      <button class="badge" id="runBtn" type="button" title="The run's settings, and launching it">run&hellip;</button>
+      <button class="runstate" id="runState" type="button" hidden></button>
     </span>
   </span>
   <span class="name status" id="name">&mdash;</span>
@@ -829,6 +894,27 @@
 <div class="classmenu" id="flagMenu" role="menu" hidden></div>
 <div class="filterpanel exempanel" id="exemPanel" role="dialog" aria-label="The run's exemplars" hidden></div>
 <div class="filterpanel" id="filterPanel" role="dialog" aria-label="Filter images by content" hidden></div>
+
+<dialog class="keys rundialog" id="runDialog" aria-labelledby="runTitle">
+  <header class="keys-head">
+    <h2 id="runTitle">Run</h2>
+    <span class="dialog-spacer"></span>
+    <button class="badge" id="runDup" type="button" title="A new run with these settings and exemplars - for a sweep, change one setting">duplicate run&hellip;</button>
+    <button class="badge" id="runClose" type="button">close</button>
+  </header>
+  <div class="keys-body">
+    <section class="rl" id="runLaunch" aria-live="polite"></section>
+    <div id="runForm"></div>
+  </div>
+  <footer class="keys-foot">
+    <span class="run-status" id="runStatus" aria-live="polite"></span>
+    <span class="dialog-spacer"></span>
+    <span class="run-own" id="runOwn"></span>
+    <button class="badge" id="runDefaults" type="button" title="Start over from the YAML's settings">from the YAML</button>
+    <button class="badge" id="runRevert" type="button">revert</button>
+    <button class="badge primary" id="runSave" type="button">save</button>
+  </footer>
+</dialog>
 
 <dialog class="keys" id="keysDialog" aria-labelledby="keysTitle">
   <div class="keys-head">
@@ -927,6 +1013,19 @@ const el = {
   thresh: document.getElementById("thresh"),
   applyThresh: document.getElementById("applyThresh"),
   exemcount: document.getElementById("exemcount"),
+  runBtn: document.getElementById("runBtn"),
+  runState: document.getElementById("runState"),
+  runDialog: document.getElementById("runDialog"),
+  runTitle: document.getElementById("runTitle"),
+  runLaunch: document.getElementById("runLaunch"),
+  runForm: document.getElementById("runForm"),
+  runStatus: document.getElementById("runStatus"),
+  runSave: document.getElementById("runSave"),
+  runRevert: document.getElementById("runRevert"),
+  runDefaults: document.getElementById("runDefaults"),
+  runDup: document.getElementById("runDup"),
+  runOwn: document.getElementById("runOwn"),
+  runClose: document.getElementById("runClose"),
   exemPanel: document.getElementById("exemPanel"),
   mode: document.getElementById("mode"),
   approve: document.getElementById("approve"),
@@ -1203,6 +1302,11 @@ function pointerEditStart(e) {
     return;
   }
   const hit = hitTest(p);
+  // In exemplar mode a click on one of your boxes makes it an exemplar.
+  if (hit && mode === "exemplar" && hit.kind === "box" && !twinOfExemplar(boxes[hit.i])) {
+    pickExistingBox(hit.i);
+    return;
+  }
   if (hit) {
     // `picked`: chosen by clicking it, as opposed to selected automatically
     // after drawing, pasting or approving (see below).
@@ -2370,6 +2474,7 @@ function pointerCtx(e) {
 
 window.addEventListener("keydown", (e) => {
   if (el.keysDialog.open) return;            // the settings dialog owns the keys
+  if (el.runDialog.open) return;             // so does the run window
   const t = e.target;
   if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"
       || t.isContentEditable) return;
@@ -2396,6 +2501,7 @@ window.addEventListener("blur", releaseAll);
 window.addEventListener("mousedown", (e) => {
   swallow = null;                            // a new press: the last one is over
   if (el.keysDialog.open) { captureMouse(e); return; }
+  if (el.runDialog.open) return;             // the run window is not the editor
   const input = mouseInputOf(e);
   if (!input) return;
   if (inputClass(input) === "click" && !overImage(e)) return;
@@ -2438,6 +2544,7 @@ for (const type of ["mouseup", "click", "auxclick", "contextmenu"]) {
 let wheelState = { input: null, acc: 0, quietUntil: 0 };
 window.addEventListener("wheel", (e) => {
   if (el.keysDialog.open) { captureWheel(e); return; }
+  if (el.runDialog.open) return;
   if (!overImage(e)) return;                 // lists and pages scroll as always
   e.preventDefault();                        // the image owns its wheel: no page zoom
   const input = wheelInputOf(e);
@@ -6472,18 +6579,64 @@ function cropUrl(image, e, size = 160) {
 const sameExemplar = (a, b) => a.image === b.image
   && ["cx", "cy", "w", "h"].every((k) => Math.abs(a[k] - b[k]) < 0.002);
 
-function exemCard(e, caption, badge, onOpen) {
-  const card = h("button", "ex-card" + (badge ? " " + badge.cls : ""));
-  card.type = "button";
-  card.title = `${e.image} \u2013 open it`;
+function exemCard(e, caption, badge, onOpen, actions = [], dim = false) {
+  const card = h("div", "ex-card" + (badge ? " " + badge.cls : "") + (dim ? " beyond" : ""));
+  const open = h("button", "ex-open");
+  open.type = "button";
+  open.title = `${e.image} \u2013 open it`;
   const img = h("img");
   img.alt = "";
   img.loading = "lazy";
   img.src = cropUrl(e.image, e);
-  card.append(img, h("span", "ex-cap", caption));
+  open.append(img, h("span", "ex-cap", caption));
+  open.addEventListener("click", onOpen);
+  card.appendChild(open);
   if (badge) card.appendChild(h("span", "ex-badge", badge.text));
-  card.addEventListener("click", onOpen);
+  if (actions.length) {
+    const row = h("div", "ex-actions");
+    for (const [text, label, fn, disabled] of actions) {
+      const b = h("button", "badge", text);
+      b.type = "button";
+      b.title = label;
+      b.setAttribute("aria-label", label);
+      b.disabled = !!disabled;
+      b.addEventListener("click", fn);
+      row.appendChild(b);
+    }
+    card.appendChild(row);
+  }
   return card;
+}
+
+/** Swap two exemplars in the set's order: "the first n" of a class are the
+    ones a run uses. */
+async function moveExemplar(d, a, b) {
+  const ids = d.picked.map((x) => x.id);
+  const i = ids.indexOf(a.id), j = ids.indexOf(b.id);
+  [ids[i], ids[j]] = [ids[j], ids[i]];
+  try {
+    const r = await fetch(BASE + "api/exemplars/order?" + new URLSearchParams({ project, run }), {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }),
+    });
+    if (!r.ok) throw new Error(`${r.status}`);
+  } catch (err) {
+    flash(`Not moved: ${err.message}`);
+  }
+  openExemPanel();
+}
+
+async function unpickExemplar(e) {
+  if (!window.confirm(`Un-pick this exemplar (${e.image})? Its box stays, as an ordinary box.`)) return;
+  try {
+    const r = await fetch(BASE + `api/exemplar/${e.id}?` + new URLSearchParams({ project, run }), { method: "DELETE" });
+    if (!r.ok) throw new Error(`${r.status}`);
+  } catch (err) {
+    flash(`Not un-picked: ${err.message}`);
+    return;
+  }
+  await refreshExemplarSet();
+  if (view === "editor" && images[idx] && images[idx].name === e.image && await flush()) await load(idx);
+  openExemPanel();
 }
 
 function renderExemPanel(d) {
@@ -6493,29 +6646,52 @@ function renderExemPanel(d) {
   const fromManifest = last && last.source === "manifest";
   let summary;
   if (!last) {
-    summary = "Not run yet: these prompt the run's next start.";
+    summary = "Not run yet: these prompt the run's next launch.";
   } else {
     const when = new Date(last.when).toLocaleString();
-    const where = fromManifest ? "from this list" : `drawn at random from gt/ (source: ${last.source})`;
-    summary = `Last run ${when}: ${plural(last.used.length, "exemplar", "exemplars")} used, ${where}`
-      + (last.class_name ? `, class ${last.class_name}` : "") + ".";
+    const where = fromManifest ? "picked here" : `drawn at random from gt/ (source: ${last.source})`;
+    summary = `Last run ${when}: ${plural(last.used.length, "exemplar", "exemplars")} used, ${where}.`;
   }
   frag.appendChild(h("p", "fp-note", summary));
 
+  const wanted = d.wanted || [];
+  const single = wanted.length === 1;
+  const groups = wanted.map((w) => ({ name: w.name, n: w.n, inRun: true,
+    items: d.picked.filter((e) => e.cls === w.name || (single && !e.cls)) }));
+  const placed = new Set(groups.flatMap((g) => g.items.map((e) => e.id)));
+  const others = {};
+  for (const e of d.picked) if (!placed.has(e.id)) (others[e.cls || "no class"] ||= []).push(e);
+  for (const [name, items] of Object.entries(others)) groups.push({ name, n: null, inRun: false, items });
+
   if (!d.picked.length) {
-    frag.appendChild(h("p", "fp-note", "None picked for this run yet: e, then draw a box, picks one."));
-  } else {
-    frag.appendChild(h("div", "ex-head", plural(d.picked.length, "exemplar picked", "exemplars picked")));
+    frag.appendChild(h("p", "fp-note", "None picked for this run yet: e, then draw a box or click one of yours."));
+  }
+  if (!wanted.length) {
+    frag.appendChild(h("p", "fp-note", "The run predicts no class yet: add classes in its settings (run\u2026)."));
+  }
+  for (const g of groups) {
+    const head = h("div", "ex-head");
+    const sw = h("i");
+    sw.style.background = classStyle(g.name).color;
+    head.append(sw, g.inRun
+      ? `${g.name}: ${plural(g.items.length, "exemplar", "exemplars")} picked, the run uses the first ${g.n}`
+      : `${g.name}: ${plural(g.items.length, "exemplar", "exemplars")}, not a class of this run`);
+    frag.appendChild(head);
+    if (g.inRun && !g.items.length) {
+      frag.appendChild(h("p", "fp-note warn", d.source === "random_gt"
+        ? "None picked - fine: this run samples gt/ boxes." : "None picked: the run cannot launch until there are some."));
+      continue;
+    }
     const grid = h("div", "ex-grid");
-    d.picked.forEach((e, k) => {
-      let badge = null;
-      if (fromManifest) {
-        badge = last.used.some((u) => sameExemplar(e, u))
-          ? { cls: "used", text: "used" }
-          : { cls: "unused", text: e.cls && last.class_name && e.cls !== last.class_name ? "other class" : "not used" };
-      }
+    g.items.forEach((e, k) => {
+      const used = fromManifest && last.used.some((u) => sameExemplar(e, u));
+      const badge = used ? { cls: "used", text: "used" } : null;
       const name = e.image.replace(/\.[^.]+$/, "");
-      grid.appendChild(exemCard(e, `${k + 1} \u00b7 ${name}${e.cls ? " \u00b7 " + e.cls : ""}`, badge, () => openExemplar(e)));
+      grid.appendChild(exemCard(e, `${k + 1} \u00b7 ${name}`, badge, () => openExemplar(e), [
+        ["\u2191", "Earlier: used before the ones after it", () => moveExemplar(d, e, g.items[k - 1]), k === 0],
+        ["\u2193", "Later", () => moveExemplar(d, e, g.items[k + 1]), k === g.items.length - 1],
+        ["\u2715", "Un-pick: its box stays, as an ordinary box", () => unpickExemplar(e)],
+      ], g.inRun && k >= g.n));
     });
     frag.appendChild(grid);
   }
@@ -6523,12 +6699,28 @@ function renderExemPanel(d) {
     frag.appendChild(h("div", "ex-head", "Used in the last run, from gt/"));
     const grid = h("div", "ex-grid");
     last.used.forEach((u, k) => {
-      grid.appendChild(exemCard(u, `${k + 1} \u00b7 ${u.image.replace(/\.[^.]+$/, "")}`,
+      grid.appendChild(exemCard(u, `${k + 1} \u00b7 ${u.image.replace(/\.[^.]+$/, "")}${u.cls ? " \u00b7 " + u.cls : ""}`,
                                 { cls: "used", text: "used" }, () => openExemplar(u)));
     });
     frag.appendChild(grid);
   }
   el.exemPanel.replaceChildren(frag);
+}
+
+/** In exemplar mode, a click on one of your boxes makes it an exemplar - as
+    the class it is - without a second box: the box itself is the twin. */
+async function pickExistingBox(i) {
+  const b = boxes[i];
+  const before = snapshot();
+  const box = { x1: b.x1, y1: b.y1, x2: b.x2, y2: b.y2, cls: b.cls };
+  const id = await postExemplar(box);
+  if (id === null) return;
+  exems.push({ id, ...box });
+  const ev = logEvent("exemplar.pick", { id, box: nb(box), cls: b.cls, existing: true });
+  record("exemplar pick", before, [ev], { exemplar: { kind: "pick", id, box } });
+  sel = null;
+  render();
+  flash(`Exemplar: this ${b.cls} box`);
 }
 
 async function openExemPanel() {
@@ -6577,6 +6769,466 @@ el.exemPanel.addEventListener("keydown", (e) => {
   e.stopPropagation();
   if (e.key === "Escape") { e.preventDefault(); closeExemPanel(); el.exemcount.focus(); }
 });
+
+// ---------------------------------------------------------------- runs: settings and launching
+//
+// "run…" next to the run picker opens the run's window: launching it, how far
+// it is, its log - and its settings, which start as the YAML's and are kept
+// with the run (runs/<run>/settings.yaml). Next to the button, the run's state
+// while it is queued or running (and how it ended), wherever you are.
+
+let runInfo = null;            // the last /api/run/job: {job, state, progress, log, mode, allocation}
+let runSettings = null;        // the last /api/run/settings
+let runDraft = null;           // the settings as edited, not yet saved
+let runDirty = false;
+let runPicked = {};            // class -> exemplars picked as it, for the class table
+let runPollTimer = 0;
+let runLastState = null;
+const RUN_ACTIVE = ["queued", "running", "cancelling"];
+
+// ---------------------------------------------------------------- state, polled
+
+function runPct(info) {
+  const p = (info && info.progress) || {};
+  return p.total ? Math.round((100 * (p.done || 0)) / p.total) : 0;
+}
+
+function renderRunState() {
+  const st = runInfo && runInfo.state;
+  el.runState.hidden = !run || !st;
+  if (!st) return;
+  const p = runInfo.progress || {};
+  const text = {
+    queued: "queued",
+    running: p.phase === "predicting" ? `running ${runPct(runInfo)} %` : (p.phase || "starting"),
+    cancelling: "cancelling",
+    done: "done",
+    failed: "failed",
+    cancelled: "cancelled",
+    stopped: "stopped",
+  }[st] || st;
+  el.runState.textContent = text;
+  el.runState.dataset.state = st;
+  el.runState.title = `Run ${run}: ${text}` + (p.message ? ` \u2013 ${p.message}` : "") + ". Click for its window.";
+}
+
+async function pollRun() {
+  clearTimeout(runPollTimer);
+  if (!project || !run) { runInfo = null; runLastState = null; renderRunState(); return; }
+  const asked = run;
+  try {
+    const r = await fetch(q("api/run/job"));
+    if (r.ok && asked === run) runInfo = await r.json();
+  } catch (err) { /* the next poll tries again */ }
+  const now = runInfo && runInfo.state;
+  if (RUN_ACTIVE.includes(runLastState) && now && !RUN_ACTIVE.includes(now)) runFinished(now);
+  runLastState = now;
+  renderRunState();
+  if (el.runDialog.open) renderLaunch();
+  const active = RUN_ACTIVE.includes(now);
+  runPollTimer = setTimeout(pollRun, active ? 2000 : el.runDialog.open ? 5000 : 60000);
+}
+
+/** A run that was going has ended: say so, and show its predictions. */
+async function runFinished(state) {
+  flash(`Run ${run}: ${state}`);
+  imageStatsChanged();
+  if (state === "done" && view === "editor" && images[idx] && await flush()) load(idx);
+}
+
+// ---------------------------------------------------------------- the window
+
+async function openRunDialog() {
+  if (!project) return;
+  if (!run) { flash("Select or make a run first (the picker next to this button)"); return; }
+  el.runTitle.textContent = `Run ${run}`;
+  el.runForm.replaceChildren(h("p", "keyhint", "loading\u2026"));
+  el.runLaunch.replaceChildren();
+  el.runDialog.showModal();
+  await loadRunSettings(false);
+  pollRun();
+}
+
+async function loadRunSettings(defaults) {
+  try {
+    const r = await fetch(q("api/run/settings", defaults ? { defaults: "true" } : {}));
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    runSettings = await r.json();
+    const e = await fetch(q("api/run-exemplars"));
+    runPicked = {};
+    if (e.ok) for (const x of (await e.json()).picked) runPicked[x.cls || ""] = (runPicked[x.cls || ""] || 0) + 1;
+  } catch (err) {
+    el.runForm.replaceChildren(h("p", "keyhint warn", `The run's settings could not be read: ${err.message}`));
+    return;
+  }
+  runDraft = structuredClone(runSettings.settings);
+  // One class, the old way (class_name and a shared text prompt), becomes the
+  // class list the form edits; saved, it is written as that list.
+  const inf = runDraft.inference;
+  if (!inf.classes.length && inf.class_name) {
+    inf.classes = [{ name: inf.class_name, text_prompt: inf.text_prompt, n: null, gt_class: null }];
+    inf.class_name = null;
+    inf.text_prompt = null;
+    runDirty = defaults || !runSettings.own;
+  } else {
+    runDirty = !!defaults;
+  }
+  renderRunForm();
+}
+
+function closeRunDialog() {
+  if (runDirty && !window.confirm("The run's settings have changes that are not saved. Close anyway?")) return;
+  runDirty = false;
+  el.runDialog.close();
+}
+
+// ---------------------------------------------------------------- launching
+
+function fmtLeft(s) {
+  if (s == null) return "";
+  const h_ = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
+  return h_ ? `${h_} h ${m} min` : `${m} min`;
+}
+
+function renderLaunch() {
+  const info = runInfo || {};
+  const st = info.state;
+  const p = info.progress || {};
+  const frag = document.createDocumentFragment();
+  const line = h("div", "rl-line");
+  const label = !st ? "Not launched from here yet."
+    : {
+      queued: "Queued: waiting for a GPU.",
+      running: `Running: ${p.phase || "starting"}` + (p.total ? ` \u2013 ${p.done || 0} of ${plural(p.total, "image", "images")}` : "")
+        + (p.class ? `, ${p.class}` : "") + ".",
+      cancelling: "Cancelling\u2026",
+      done: `Done: ${plural(p.done || 0, "image", "images")}` + (p.message ? ` (${p.message})` : "") + ".",
+      failed: `Failed: ${p.message || "see the log"}.`,
+      cancelled: "Cancelled.",
+      stopped: "Stopped without finishing - killed, or the session it ran in ended.",
+    }[st];
+  line.appendChild(h("span", "rl-state" + (st ? " " + st : ""), label));
+  if (info.job) line.appendChild(h("span", "rl-meta",
+    `${info.job.mode === "slurm" ? `Slurm job ${info.job.slurm_id}` : "in this session"}, started ${new Date(info.job.started).toLocaleString()} by ${info.job.by}`));
+  frag.appendChild(line);
+  if (RUN_ACTIVE.includes(st) || (st && p.total)) {
+    const bar = h("div", "rl-bar");
+    const fill = h("span");
+    fill.style.width = `${runPct(info)}%`;
+    bar.appendChild(fill);
+    frag.appendChild(bar);
+  }
+  const actions = h("div", "rl-actions");
+  const go = h("button", "badge primary", RUN_ACTIVE.includes(st) ? "running\u2026" : "launch");
+  go.type = "button";
+  go.dataset.f = "run:launch";
+  go.disabled = RUN_ACTIVE.includes(st);
+  go.addEventListener("click", () => launchRun(false));
+  actions.appendChild(go);
+  if (RUN_ACTIVE.includes(st) && st !== "cancelling") {
+    const stop = h("button", "badge danger", "cancel run");
+    stop.type = "button";
+    stop.dataset.f = "run:cancel";
+    stop.addEventListener("click", cancelRun);
+    actions.appendChild(stop);
+  }
+  const where = info.mode === "slurm"
+    ? "Launches as a Slurm job of its own: it waits for a GPU, and keeps going without this session."
+    : "Launches in this session, on its GPU, at once; it ends when the session does."
+      + (info.allocation && info.allocation.left ? ` The session has ${fmtLeft(info.allocation.left_s) || info.allocation.left} left.` : "");
+  actions.appendChild(h("span", "rl-where" + (info.mode !== "slurm" && info.allocation && info.allocation.left_s != null
+    && info.allocation.left_s < 1800 ? " warn" : ""), where));
+  frag.appendChild(actions);
+  if (info.log && info.log.length) {
+    const det = h("details", "rl-log");
+    det.open = RUN_ACTIVE.includes(st) || st === "failed" || el.runLaunch.querySelector(".rl-log[open]") !== null;
+    det.appendChild(h("summary", "", "log"));
+    const pre = h("pre", "", info.log.join("\n"));
+    det.appendChild(pre);
+    frag.appendChild(det);
+    requestAnimationFrame(() => { pre.scrollTop = pre.scrollHeight; });
+  }
+  el.runLaunch.replaceChildren(frag);
+}
+
+async function launchRun(confirmed) {
+  if (runDirty && !(await saveRunSettings())) return;
+  try {
+    const r = await fetch(BASE + "api/run/launch?" + new URLSearchParams({ project, run, confirm: confirmed ? "true" : "false" }),
+                          { method: "POST" });
+    const body = await r.json().catch(() => ({}));
+    if (r.status === 409 && body.detail && body.detail.confirm) {
+      if (window.confirm(`${body.detail.confirm}.\n\nLaunch anyway?`)) return launchRun(true);
+      return;
+    }
+    if (!r.ok) {
+      const d = body.detail;
+      runMessage(Array.isArray(d) ? d.map((x) => (typeof x === "string" ? x : x.msg)) : [String(d || r.status)], true);
+      return;
+    }
+    runInfo = body;
+    runMessage(body.warnings && body.warnings.length ? body.warnings : [`Launched ${run}.`], !!(body.warnings || []).length);
+    runLastState = body.state;
+    pollRun();
+  } catch (err) {
+    runMessage([`Not launched: ${err.message}`], true);
+  }
+}
+
+async function cancelRun() {
+  if (!window.confirm(`Cancel run ${run}? Images it has done keep their predictions.`)) return;
+  try {
+    const r = await fetch(BASE + "api/run/cancel?" + new URLSearchParams({ project, run }), { method: "POST" });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    runInfo = await r.json();
+  } catch (err) {
+    runMessage([`Not cancelled: ${err.message}`], true);
+  }
+  pollRun();
+}
+
+function runMessage(lines, warn) {
+  el.runStatus.replaceChildren(...lines.map((t) => h("div", warn ? "warn" : "", t)));
+}
+
+// ---------------------------------------------------------------- the settings form
+
+const getAt = (o, path) => path.reduce((x, k) => (x == null ? x : x[k]), o);
+function setAt(o, path, v) {
+  const last = path[path.length - 1];
+  getAt(o, path.slice(0, -1))[last] = v;
+  runDirty = true;
+  renderRunFooter();
+}
+
+function rfRow(label, control, hint) {
+  const row = h("label", "rf-row");
+  row.append(h("span", "rf-label", label), control);
+  if (hint) row.appendChild(h("span", "rf-hint", hint));
+  return row;
+}
+
+function rfNumber(path, { min, max, step = 1, nullable = false, placeholder = "" } = {}) {
+  const i = h("input", "field rf-num");
+  i.type = "number";
+  if (min != null) i.min = String(min);
+  if (max != null) i.max = String(max);
+  i.step = String(step);
+  i.placeholder = placeholder;
+  const v = getAt(runDraft, path);
+  i.value = v == null ? "" : String(v);
+  i.dataset.f = `rs:${path.join(".")}`;
+  i.addEventListener("input", () => {
+    if (i.value.trim() === "") { if (nullable) setAt(runDraft, path, null); return; }
+    const n = Number(i.value);
+    if (Number.isFinite(n)) setAt(runDraft, path, n);
+  });
+  return i;
+}
+
+function rfText(path, placeholder = "", nullable = true) {
+  const i = h("input", "field rf-text");
+  i.type = "text";
+  i.placeholder = placeholder;
+  const v = getAt(runDraft, path);
+  i.value = v == null ? "" : String(v);
+  i.dataset.f = `rs:${path.join(".")}`;
+  i.addEventListener("input", () => setAt(runDraft, path, i.value.trim() === "" && nullable ? null : i.value));
+  return i;
+}
+
+function rfCheck(path, label) {
+  const l = h("label", "stylefield toggle rf-check");
+  const c = h("input");
+  c.type = "checkbox";
+  c.checked = !!getAt(runDraft, path);
+  c.dataset.f = `rs:${path.join(".")}`;
+  c.addEventListener("change", () => setAt(runDraft, path, c.checked));
+  l.append(c, h("span", "", label));
+  return l;
+}
+
+function rfSelect(path, options, onChange) {
+  const s = h("select", "picker");
+  for (const [v, label] of options) s.appendChild(new Option(label, v));
+  s.value = getAt(runDraft, path);
+  s.dataset.f = `rs:${path.join(".")}`;
+  s.addEventListener("change", () => { setAt(runDraft, path, s.value); if (onChange) onChange(); });
+  return s;
+}
+
+function rfColor(path) {
+  const i = h("input");
+  i.type = "color";
+  const [r, g, b] = getAt(runDraft, path);
+  i.value = "#" + [r, g, b].map((v) => Number(v).toString(16).padStart(2, "0")).join("");
+  i.dataset.f = `rs:${path.join(".")}`;
+  i.addEventListener("input", () => setAt(runDraft, path,
+    [1, 3, 5].map((k) => parseInt(i.value.slice(k, k + 2), 16))));
+  return i;
+}
+
+function classTable() {
+  const inf = runDraft.inference;
+  const gt = runDraft.exemplars.source === "random_gt";
+  const wrap = h("div", "rf-classes");
+  const head = h("div", "rf-crow rf-chead");
+  head.append(h("span", "", "class"), h("span", "", "text prompt"),
+              h("span", "", "exemplars"), h("span", "", gt ? "gt/ class" : "picked"), h("span", "", ""));
+  wrap.appendChild(head);
+  inf.classes.forEach((c, k) => {
+    const row = h("div", "rf-crow");
+    const name = h("span", "rf-cname");
+    const sw = h("i");
+    sw.style.background = classStyle(c.name).color;
+    name.append(sw, c.name);
+    const n = rfNumber(["inference", "classes", k, "n"], { min: 1, nullable: true, placeholder: String(runDraft.exemplars.n) });
+    n.title = `How many exemplars of ${c.name} prompt it; empty: ${runDraft.exemplars.n}, the run's default`;
+    const extra = gt
+      ? rfText(["inference", "classes", k, "gt_class"], runDraft.inference.classes.length === 1 ? "any" : c.name)
+      : h("span", "rf-picked" + (runPicked[c.name] ? "" : " none"), runPicked[c.name] ? `${runPicked[c.name]} picked` : "none picked");
+    const del = h("button", "badge", "\u2715");
+    del.type = "button";
+    del.title = `Do not predict ${c.name} in this run`;
+    del.dataset.f = `rs:class:${c.name}:remove`;
+    del.addEventListener("click", () => { inf.classes.splice(k, 1); runDirty = true; renderRunForm(); });
+    row.append(name, rfText(["inference", "classes", k, "text_prompt"], "none: exemplars only"), n, extra, del);
+    wrap.appendChild(row);
+  });
+  const add = h("div", "rf-cadd");
+  const left = classList().filter((n) => !inf.classes.some((c) => c.name === n));
+  if (left.length) {
+    const pick = h("select", "picker");
+    pick.dataset.f = "rs:class:add";
+    pick.appendChild(new Option("add a class\u2026", ""));
+    for (const n of left) pick.appendChild(new Option(n, n));
+    pick.addEventListener("change", () => {
+      if (!pick.value) return;
+      inf.classes.push({ name: pick.value, text_prompt: null, n: null, gt_class: null });
+      runDirty = true;
+      renderRunForm();
+    });
+    add.appendChild(pick);
+  } else if (!inf.classes.length) {
+    add.appendChild(h("span", "rf-hint", "The project has no classes yet: add them in settings (k), Appearance."));
+  }
+  wrap.appendChild(add);
+  return wrap;
+}
+
+function rfSection(title, ...rows) {
+  const sec = h("section", "rf-sec");
+  sec.appendChild(h("h4", "", title));
+  sec.append(...rows);
+  return sec;
+}
+
+function renderRunForm() {
+  if (!runDraft) return;
+  const d = runDraft;
+  const frag = document.createDocumentFragment();
+  frag.appendChild(rfSection("Classes to predict",
+    h("p", "rf-note", "Each class is prompted on its own - its exemplars, its text - and all are written "
+      + "to the same predictions. A class needs exemplars picked as it (e, then a box, or a click on one "
+      + "of your boxes), or gt/ boxes to sample."),
+    classTable()));
+  frag.appendChild(rfSection("Exemplars",
+    rfRow("from", rfSelect(["exemplars", "source"], [["manifest", "the ones picked in the annotator"],
+      ...(runSettings.gt ? [["random_gt", "random boxes from gt/"]] : [])], renderRunForm)),
+    rfRow("per class", rfNumber(["exemplars", "n"], { min: 1 }), "unless a class says otherwise; the first ones picked"),
+    ...(d.exemplars.source === "random_gt" ? [rfRow("seed", rfNumber(["exemplars", "seed"], { nullable: true }), "which random boxes")] : []),
+    rfRow("padding", rfNumber(["exemplars", "pad"], { min: 0, step: 0.05 }), "context around each exemplar, times its size"),
+    rfRow("tile edge", rfNumber(["exemplars", "tile_max_edge"], { min: 16 }), "px, the most a pasted exemplar may measure")));
+  frag.appendChild(rfSection("Images",
+    rfRow("how many", rfNumber(["dataset", "num_images"], { min: 1, nullable: true, placeholder: "all" }), "empty: every image; a number: a random subset"),
+    rfRow("subset seed", rfNumber(["dataset", "image_seed"]), "which random subset"),
+    rfCheck(["overwrite"], "replace predictions the run already has (off: only images without)")));
+  frag.appendChild(rfSection("SAM 3",
+    rfRow("confidence", rfNumber(["inference", "conf_threshold"], { min: 0, max: 1, step: 0.01 }), "kept from this score; the editor can show fewer"),
+    rfRow("image edge", rfNumber(["inference", "max_edge"], { min: 64 }), "px, images are scaled down to this before SAM 3"),
+    rfCheck(["inference", "fast_prompt_append"], "append the exemplar prompts in one step")));
+  const adv = h("details", "rf-adv");
+  adv.appendChild(h("summary", "", "advanced: the exemplar strip, debug output"));
+  adv.append(
+    rfRow("strip side", rfSelect(["strip", "side"], [["auto", "auto (the long edge)"], ["right", "right"], ["bottom", "bottom"]])),
+    rfRow("strip margin", rfNumber(["strip", "margin"], { min: 0 }), "px between tiles"),
+    rfRow("strip fill", (() => { const w = h("span", "rf-triple"); for (let k = 0; k < 3; k++) w.appendChild(rfNumber(["strip", "fill", k], { min: 0, max: 255 })); return w; })(), "RGB of the empty strip"),
+    rfRow("overlays", rfNumber(["debug", "save_overlays"], { min: 0 }), "images to save an overlay for"),
+    rfRow("composites", rfNumber(["debug", "save_composites"], { min: 0 }), "canvases to save"),
+    rfRow("mask colour", rfColor(["debug", "mask_color"])),
+    rfRow("mask alpha", rfNumber(["debug", "mask_alpha"], { min: 0, max: 1, step: 0.05 })),
+    rfRow("edge alpha", rfNumber(["debug", "mask_edge_alpha"], { min: 0, max: 1, step: 0.05 })),
+    rfCheck(["debug", "draw_pred_boxes"], "draw predicted boxes on overlays"),
+    rfCheck(["debug", "draw_gt_boxes"], "draw gt/ boxes on overlays"),
+    ...(d.exemplars.source === "random_gt" && d.inference.classes.length === 1
+      ? [rfRow("gt/ class", rfText(["dataset", "gt_class"], "any"), "for a one-class run: which gt/ boxes")] : []));
+  frag.appendChild(adv);
+  el.runForm.replaceChildren(frag);
+  renderRunFooter();
+}
+
+function renderRunFooter() {
+  el.runSave.disabled = !runDirty;
+  el.runRevert.disabled = !runDirty;
+  el.runOwn.textContent = runSettings && runSettings.own
+    ? (runDirty ? "changed, not saved" : "the run's own settings")
+    : "the YAML's settings - saving makes them the run's own";
+}
+
+async function saveRunSettings() {
+  try {
+    const r = await fetch(BASE + "api/run/settings?" + new URLSearchParams({ project, run }), {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(runDraft),
+    });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) {
+      const d = body.detail;
+      runMessage(Array.isArray(d)
+        ? d.map((x) => `${(x.loc || []).filter((k) => k !== "body").join(" \u203a ")}: ${x.msg}`)
+        : [String(d || r.status)], true);
+      return false;
+    }
+    runSettings = { ...runSettings, settings: body.settings, own: true };
+    runDirty = false;
+    renderRunFooter();
+    runMessage(["Saved to the run's settings.yaml."], false);
+    return true;
+  } catch (err) {
+    runMessage([`Not saved: ${err.message}`], true);
+    return false;
+  }
+}
+
+async function duplicateRun() {
+  if (runDirty && !(await saveRunSettings())) return;
+  const name = (window.prompt(`Name for a copy of ${run} (its settings and exemplars, no outputs):`, `${run}_2`) || "").trim();
+  if (!name) return;
+  try {
+    const r = await fetch(BASE + "api/run/duplicate?" + new URLSearchParams({ project, run, to: name }), { method: "POST" });
+    if (!r.ok) throw new Error(`${r.status} ${(await r.json().catch(() => ({}))).detail || ""}`);
+    const d = await r.json();
+    el.runDialog.close();
+    localStorage.setItem(K_RUN(project), d.run);
+    await fetchProjects();
+    fillRuns();
+    await runChanged();
+    flash(`Run ${d.run}: a copy, with ${plural(d.exemplars, "exemplar", "exemplars")}`);
+    openRunDialog();
+  } catch (err) {
+    runMessage([`Not copied: ${err.message}`], true);
+  }
+}
+
+el.runBtn.addEventListener("click", openRunDialog);
+el.runState.addEventListener("click", openRunDialog);
+el.runClose.addEventListener("click", closeRunDialog);
+el.runSave.addEventListener("click", saveRunSettings);
+el.runRevert.addEventListener("click", () => { runDirty = false; loadRunSettings(false); runMessage([], false); });
+el.runDefaults.addEventListener("click", () => {
+  if (window.confirm("Start over from the YAML's settings? Nothing is saved until you save.")) loadRunSettings(true);
+});
+el.runDup.addEventListener("click", duplicateRun);
+el.runDialog.addEventListener("cancel", (e) => { e.preventDefault(); closeRunDialog(); });
 
 // ---------------------------------------------------------------- small commands
 
@@ -6988,6 +7640,7 @@ async function openProject(name) {
 
 async function refreshExemplarSet() {
   exemSet = null;
+  pollRun();                         // a new project or run: its launch state
   try {
     const r = await fetch(q("api/exemplars"));
     if (r.ok) exemSet = await r.json();

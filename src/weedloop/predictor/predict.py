@@ -73,10 +73,15 @@ Outputs
 
 Prediction line format (8 fields, space separated):
     <class> <cx> <cy> <w> <h> <provenance> <quality> <score>
-The class is a NAME - inference.class_name - exactly as in the annotation
-files, not a number that needs a mapping to mean anything. It should be a
-class on the project's list in the annotator, so that approving a prediction
-keeps its class; the run warns when it is not. Fields 2-5 are YOLO geometry,
+The class is a NAME, exactly as in the annotation files, not a number that
+needs a mapping to mean anything. A run predicts one class or several
+(inference.classes): each is prompted on its own - its own exemplar tiles, its
+own text - and all of them are written to the same file per image. Each
+should be a class on the project's list in the annotator, so that approving
+a prediction keeps its class; the run warns when one is not.
+
+Progress goes to <run>/progress.json as the run goes (phase, images done,
+total), which is how the annotator shows a run it launched. Fields 2-5 are YOLO geometry,
 normalised; fields 6-8 are the extra flags the annotation tool reads.
 Converting to a standard format (numeric YOLO, COCO) is an export step.
 
@@ -148,25 +153,39 @@ def build_model_and_processor(cfg):
 # ------------------------------ dataset -------------------------------------
 
 def read_yolo_boxes(txt_path: Path, cfg):
-    """Normalised cxcywh boxes of one gt/ file, of the class dataset.gt_class
-    (every class when that is null). Classes are compared as class tokens, so
-    a numeric file (0, 0.0) and a named one (rumex) both work."""
+    """(class, normalised cxcywh) for every box of one gt/ file. Classes are
+    class tokens, so a numeric file (0, 0.0) and a named one (rumex) both work;
+    which class counts is decided per run class (gt_wanted)."""
     boxes = []
     if not txt_path.exists():
         return boxes
-    want = cfg.dataset.gt_class
     for line in txt_path.read_text().splitlines():
         parts = line.split()
         if len(parts) < 5:
             continue
         cls = class_token(parts[0])
-        if cls is None or (want is not None and cls != want):
+        if cls is None:
             continue
         try:
-            boxes.append(tuple(float(v) for v in parts[1:5]))
+            boxes.append((cls, tuple(float(v) for v in parts[1:5])))
         except ValueError:
             continue
     return boxes
+
+
+def gt_wanted(c, classes, cfg):
+    """The gt/ class that stands for run class `c`: its own gt_class; for a
+    one-class run, dataset.gt_class (None: every gt box, as before classes
+    were names); otherwise the class's own name."""
+    if c.gt_class is not None:
+        return c.gt_class
+    if len(classes) == 1:
+        return cfg.dataset.gt_class
+    return c.name
+
+
+def of_class(boxes, want):
+    return [b for cls, b in boxes if want is None or cls == want]
 
 
 def collect_pairs(image_dir: Path, anno_dir: Path, cfg):
@@ -211,66 +230,46 @@ class Tile:
     def size(self):
         return self.image.size
 
-def select_from_manifest(cfg, run, image_dir: Path):
-    """The first n boxes a human picked, in pick order.
-
-    Ordered, so 'the first n' is a stable subset of a longer set: n=5 against a
-    10-box manifest is reproducibly the first five, not five at random.
-
-    The manifest is run-scoped, so a sweep over pad or n reuses THIS run's
-    manifest; sweeping means copying the JSON forward to the next run
-    deliberately, not relying on a shared set.
-    """
+def read_manifest(run, image_dir: Path):
     path = run.exemplar_manifest
     if not path.is_file():
         raise SystemExit(f"exemplar manifest not found: {path}")
     data = json.loads(path.read_text())
-
     if data.get("image_dir") != str(image_dir):
         raise SystemExit(
             f"manifest was picked against {data.get('image_dir')}, "
             f"but this run reads {image_dir}; the stems would index the wrong "
             f"pictures"
         )
+    return data
+
+
+def select_from_manifest(data, c, n, single, image_dir: Path):
+    """The first n boxes picked as class c, in pick order - stable, so n=5
+    against a 10-box set is reproducibly the first five. Boxes picked before
+    exemplars recorded their class count for a one-class run only: with
+    several classes nobody can tell whose they are."""
     entries = data.get("exemplars", [])
-    if not entries:
-        raise SystemExit(f"{path.name} contains no exemplars")
-
-    # A run prompts one class. Exemplars record the class they were picked as;
-    # the others are not this run's, and "the first n" means the first n of
-    # this class. Entries picked before classes were recorded carry none and
-    # are kept, as before.
-    want = cfg.inference.class_name
-    others = [e for e in entries if e.get("cls") not in (None, want)]
-    entries = [e for e in entries if e.get("cls") in (None, want)]
-    if others:
-        print(f"[note] {len(others)} exemplar(s) in {path.name} are of other classes "
-              f"({', '.join(sorted({e['cls'] for e in others}))}) and are not used "
-              f"for {want}")
-    if not entries:
-        raise SystemExit(f"{path.name} has no exemplars of class {want!r}")
-    unlabelled = sum(1 for e in entries if e.get("cls") is None)
+    mine = [e for e in entries if e.get("cls") == c.name or (single and e.get("cls") is None)]
+    unlabelled = sum(1 for e in mine if e.get("cls") is None)
     if unlabelled:
-        print(f"[note] {unlabelled} exemplar(s) in {path.name} were picked before "
-              f"exemplars recorded their class; they are used as {want}")
-    if len(entries) < cfg.exemplars.n:
-        print(f"[warn] manifest holds {len(entries)} boxes, n={cfg.exemplars.n}; "
-              f"using all of them")
-
-    picked = []
-    for e in entries[:cfg.exemplars.n]:
-        picked.append((image_dir / e["image"], (e["cx"], e["cy"], e["w"], e["h"])))
-    return picked, data
+        print(f"[note] {unlabelled} exemplar(s) were picked before exemplars recorded "
+              f"their class; they are used as {c.name}")
+    if not mine:
+        raise SystemExit(f"no exemplars picked as {c.name!r} for this run")
+    if len(mine) < n:
+        print(f"[warn] {len(mine)} exemplar(s) of {c.name}, n={n}; using all of them")
+    return [(image_dir / e["image"], (e["cx"], e["cy"], e["w"], e["h"])) for e in mine[:n]]
 
 
-def select_random_gt(pairs, cfg, gt_dir):
-    flat = [(p, box) for p, boxes in pairs for box in boxes]
+def select_random_gt(pairs, want, n, seed, gt_dir, name):
+    flat = [(p, box) for p, boxes in pairs for box in of_class(boxes, want)]
     if not flat:
-        raise RuntimeError(f"no ground-truth boxes found under {gt_dir}")
-    draw = random.Random(cfg.exemplars.seed).sample(flat, min(cfg.exemplars.n, len(flat)))
-    if len(draw) < cfg.exemplars.n:
-        print(f"[warn] only {len(draw)} annotated boxes exist; using all of them")
-    return draw, None
+        raise SystemExit(f"no gt/ boxes of class {want!r} under {gt_dir} for {name}")
+    draw = random.Random(seed).sample(flat, min(n, len(flat)))
+    if len(draw) < n:
+        print(f"[warn] only {len(draw)} gt/ boxes of {want!r} exist for {name}; using all of them")
+    return draw
 
 def build_tiles(picked, pad, max_edge, target_max_edge):
     """Crops each picked box, downscaled by the SAME factor its source image
@@ -418,7 +417,7 @@ def append_prompts(processor, state, boxes_norm, cfg):
     return processor.add_geometric_prompt(box=list(boxes_norm[-1]), label=True, state=state)
 
 
-def segment_canvas(processor, canvas, prompt_boxes_px, target_wh, cfg, want_masks=False):
+def segment_canvas(processor, canvas, prompt_boxes_px, target_wh, cfg, want_masks=False, text=None):
     """Runs the prompted canvas and keeps only what falls in the target region.
 
     Returned boxes are xyxy pixels in the RESIZED TARGET space (W1 x H1), not
@@ -432,8 +431,9 @@ def segment_canvas(processor, canvas, prompt_boxes_px, target_wh, cfg, want_mask
     tw, th = target_wh
 
     state = processor.set_image(canvas)
-    if cfg.inference.text_prompt:
-        state = processor.set_text_prompt(prompt=cfg.inference.text_prompt, state=state)
+    text = cfg.inference.text_prompt if text is None else text
+    if text:
+        state = processor.set_text_prompt(prompt=text, state=state)
     boxes_norm = [xyxy_px_to_norm_cxcywh(b, cw, ch) for b in prompt_boxes_px]
     state = append_prompts(processor, state, boxes_norm, cfg)
 
@@ -463,7 +463,7 @@ def segment_canvas(processor, canvas, prompt_boxes_px, target_wh, cfg, want_mask
 
 # ----------------------------- predictions ----------------------------------
 
-def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg):
+def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg, class_name=None):
     """Scales resized-target xyxy pixels back to the ORIGINAL image and
     normalises to YOLO cxcywh.
 
@@ -486,7 +486,7 @@ def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg):
         if x2 - x1 < 1.0 or y2 - y1 < 1.0:
             continue
         lines.append(
-            f"{cfg.inference.class_name} "
+            f"{class_name or cfg.inference.class_name} "
             f"{((x1 + x2) / 2) / w0:.6f} {((y1 + y2) / 2) / h0:.6f} "
             f"{(x2 - x1) / w0:.6f} {(y2 - y1) / h0:.6f} "
             f"{cfg.predictions.provenance} {cfg.predictions.quality} {float(score):.4f}"
@@ -494,9 +494,16 @@ def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg):
     return lines
 
 
+def write_lines(path: Path, lines) -> int:
+    """Writes one prediction file - every class of the run - via a temporary
+    name, so an interrupted run leaves the previous version, not half of it."""
+    tmp = path.with_suffix(".txt.tmp")
+    tmp.write_text("\n".join(lines) + ("\n" if lines else ""))
+    tmp.replace(path)
+    return len(lines)
+
+
 def write_yolo_predictions(path: Path, boxes_px, scores, resized_wh, orig_wh, cfg) -> int:
-    """Writes one prediction file, via a temporary name so an interrupted run
-    leaves the previous version rather than a truncated one."""
     lines = to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg)
     tmp = path.with_suffix(".txt.tmp")
     tmp.write_text("\n".join(lines) + ("\n" if lines else ""))
@@ -538,7 +545,7 @@ def render_overlay(image, masks, pred_boxes, gt_boxes, cfg):
         for box in pred_boxes:
             draw.rectangle([float(v) for v in box], outline=tuple(cfg.debug.mask_color), width=lw)
     if cfg.debug.draw_gt_boxes:
-        for box in gt_boxes:
+        for box in gt_boxes:            # already the class's own
             draw.rectangle(norm_to_xyxy_px(box, w, h), outline="yellow", width=max(1, lw // 2))
     return out
 
@@ -552,37 +559,77 @@ def save_canvas_debug(canvas, prompt_boxes, path: Path):
     im.save(path)
 
 
+# ------------------------------- progress -----------------------------------
+
+class Progress:
+    """<run>/progress.json, rewritten as the run goes: what the annotator shows
+    of a run it launched. Small, atomic, at most a few times a second."""
+
+    def __init__(self, path: Path):
+        self.path = path
+        self.state = {"phase": "starting", "done": 0, "total": 0, "class": None,
+                      "started": time.time(), "updated": time.time(), "message": None}
+        self._last = 0.0
+        self.write(force=True)
+
+    def update(self, force=False, **kw):
+        self.state.update(kw)
+        self.write(force)
+
+    def write(self, force=False):
+        now_ = time.time()
+        if not force and now_ - self._last < 0.5:
+            return
+        self._last = now_
+        self.state["updated"] = now_
+        try:
+            tmp = self.path.with_name(f".{self.path.name}.tmp")
+            tmp.write_text(json.dumps(self.state))
+            tmp.replace(self.path)
+        except OSError:
+            pass                    # progress is a nicety; the run goes on
+
+
 # --------------------------------- main --------------------------------------
 
 def main(cfg):
-
     # One project, named by paths.dataset; one run, named by run.name. Both
     # raise with the offending path rather than producing an empty listing.
     project = cfg.project()                # FileNotFoundError names the path
     run = cfg.active_run(project)
+    run.mkdirs()
+    progress = Progress(run.progress_path)
+    try:
+        _main(cfg, project, run, progress)
+    except BaseException as exc:           # SystemExit and Ctrl-C too: say how it ended
+        msg = str(exc) if not isinstance(exc, KeyboardInterrupt) else "interrupted"
+        if not (isinstance(exc, SystemExit) and exc.code in (0, None)):
+            progress.update(force=True, phase="failed", message=msg or type(exc).__name__)
+        raise
 
-    # Every prediction line is written as this class, so it has to be set - and
-    # should be on the project's list, or an approved prediction would not keep
-    # it (the annotator gives it the class being drawn with instead).
-    class_name = cfg.inference.class_name
-    if not class_name:
-        raise SystemExit("inference.class_name is not set: it is the class every "
-                         "prediction of this run is written as (e.g. rumex)")
+
+def _main(cfg, project, run, progress):
+    # Every prediction line is written as its class, so there has to be one -
+    # and each should be on the project's list, or an approved prediction
+    # would not keep it (the annotator gives it the class being drawn with).
+    classes = cfg.inference.run_classes()
+    if not classes:
+        raise SystemExit("no class to predict: set inference.classes (or class_name)")
     known = project.class_names()
     if known is None:
         print(f"[note] {project.name} has no class list yet (or the annotator has "
-              f"not opened it since classes became names); {class_name!r} is not "
+              f"not opened it since classes became names); the classes are not "
               f"checked against one")
-    elif class_name not in known:
-        print(f"[warn] {class_name!r} is not on {project.name}'s class list "
-              f"({', '.join(known) or 'empty'}). Predictions are written as it "
-              f"anyway, but approving one in the annotator will give it the class "
-              f"being drawn with. Add it in the annotator, or fix inference.class_name.")
-    run.mkdirs()
+    else:
+        for c in classes:
+            if c.name not in known:
+                print(f"[warn] {c.name!r} is not on {project.name}'s class list "
+                      f"({', '.join(known) or 'empty'}). Predictions are written as it "
+                      f"anyway, but approving one in the annotator will give it the class "
+                      f"being drawn with. Add it in the annotator, or fix the run's classes.")
 
     image_dir = project.image_dir
     anno_dir = project.gt_dir              # may be None; collect_pairs handles it
-    output_dir = run.dir
     overlay_dir = run.overlays_dir
     pred_dir = run.predictions_dir
 
@@ -594,47 +641,62 @@ def main(cfg):
 
     print(f"project     =  {project.name}  ({project.dir})")
     print(f"run         =  {run.name}  ({run.dir})")
-    print(f"class       =  {class_name}"
-          + (f"   (gt/ labels of class {cfg.dataset.gt_class})" if cfg.dataset.gt_class else ""))
+    for c in classes:
+        text = cfg.inference.text_for(c)
+        print(f"class       =  {c.name}" + (f"   text {text!r}" if text else "")
+              + (f"   (gt/ class {gt_wanted(c, classes, cfg)})"
+                 if cfg.exemplars.source == "random_gt" else ""))
 
     pairs = collect_pairs(image_dir, anno_dir, cfg)
     n_boxes = sum(len(b) for _, b in pairs)
     print(f"found {len(pairs)} images and {n_boxes} annotated boxes under {image_dir}")
     if not pairs:
+        progress.update(force=True, phase="done", message="no images")
         return
 
-    if cfg.exemplars.source == "manifest":
-        picked, manifest_meta = select_from_manifest(cfg, run, image_dir)
-    else:
-        picked, manifest_meta = select_random_gt(pairs, cfg, anno_dir)
-
-    tiles = build_tiles(picked, cfg.exemplars.pad, cfg.exemplars.tile_max_edge, cfg.inference.max_edge)
-    
+    # Each class: its exemplars, its tiles - built once, used on every image.
+    manifest_meta = read_manifest(run, image_dir) if cfg.exemplars.source == "manifest" else None
     tile_dir = run.tiles_dir
     tile_dir.mkdir(parents=True, exist_ok=True)
-    for i, t in enumerate(tiles):
-        t.image.save(tile_dir / f"tile_{i:02d}_{Path(t.source).stem}.png")
-
-    origin = (f"set={manifest_meta['name']}" if manifest_meta
-              else f"seed={cfg.exemplars.seed}")
-    print(f"exemplar strip: {len(tiles)} tiles from "
-          f"{len({t.source for t in tiles})} image(s), "
-          f"source={cfg.exemplars.source}, {origin}")
+    for f in tile_dir.glob("tile_*.png"):  # this launch's tiles only, not a mix with the last
+        f.unlink()
+    per_class = []
+    for c in classes:
+        n = c.n or cfg.exemplars.n
+        if manifest_meta is not None:
+            picked = select_from_manifest(manifest_meta, c, n, len(classes) == 1, image_dir)
+        else:
+            picked = select_random_gt(pairs, gt_wanted(c, classes, cfg), n, cfg.exemplars.seed,
+                                      anno_dir, c.name)
+        tiles = build_tiles(picked, cfg.exemplars.pad, cfg.exemplars.tile_max_edge, cfg.inference.max_edge)
+        prefix = "" if len(classes) == 1 else f"{c.name}_"
+        for i, t in enumerate(tiles):
+            t.image.save(tile_dir / f"tile_{prefix}{i:02d}_{Path(t.source).stem}.png")
+        origin = (f"set={manifest_meta['name']}" if manifest_meta else f"seed={cfg.exemplars.seed}")
+        print(f"exemplar strip {c.name}: {len(tiles)} tiles from "
+              f"{len({t.source for t in tiles})} image(s), "
+              f"source={cfg.exemplars.source}, {origin}")
+        per_class.append((c, tiles, cfg.inference.text_for(c), gt_wanted(c, classes, cfg)))
 
     targets = pairs
     if cfg.dataset.num_images is not None:
         targets = random.Random(cfg.dataset.image_seed).sample(pairs, min(cfg.dataset.num_images, len(pairs)))
     if not cfg.run.overwrite:
-        # Keyed on the prediction file, not the overlay: overlays are now only
-        # written for the first cfg.debug.save_overlays images, so testing for one would
-        # make every later image look unprocessed.
+        # Keyed on the prediction file, not the overlay: overlays are only
+        # written for the first cfg.debug.save_overlays images, so testing for
+        # one would make every later image look unprocessed.
         targets = [(p, b) for p, b in targets
                    if not (pred_dir / f"{p.stem}.txt").exists()]
     print(f"{len(targets)} image(s) queued")
+    if not targets:
+        print("nothing to do: every image already has predictions (overwrite is off)")
+        progress.update(force=True, phase="done", total=0, message="nothing to do")
+        return
+    progress.update(force=True, phase="loading model", total=len(targets))
 
     # report how much resolution the strip costs on the first image
     probe, _ = load_image(targets[0][0], cfg)
-    probe_canvas, _, (pw, ph) = compose(probe, tiles, cfg.strip.side, cfg.strip.margin, cfg)
+    probe_canvas, _, (pw, ph) = compose(probe, per_class[0][1], cfg.strip.side, cfg.strip.margin, cfg)
     frac = (pw * ph) / (probe_canvas.width * probe_canvas.height)
     print(f"canvas {probe_canvas.width}x{probe_canvas.height} vs target {pw}x{ph} "
           f"-> the target keeps {frac:.0%} of the canvas area "
@@ -644,59 +706,67 @@ def main(cfg):
     comp_dir = run.composites_dir
     if cfg.debug.save_composites:
         comp_dir.mkdir(parents=True, exist_ok=True)
+    single = len(classes) == 1
+    progress.update(force=True, phase="predicting")
 
     with torch.inference_mode():
         n_done = n_inst = n_tile = n_written = 0
         per_image = []
         t0 = time.time()
 
-        for img_path, gt_boxes in tqdm(targets, desc="images"):
+        for img_path, gt_all in tqdm(targets, desc="images"):
             image, orig_wh = load_image(img_path, cfg)
-            canvas, prompt_boxes, target_wh = compose(image, tiles, cfg.strip.side, cfg.strip.margin, cfg)
-            if n_done < cfg.debug.save_composites:
-                save_canvas_debug(canvas, prompt_boxes, comp_dir / f"{img_path.stem}_canvas.png")
             want_masks = n_done < cfg.debug.save_overlays
-            try:
-                masks, boxes, scores, tile_hits = segment_canvas(
-                    processor, canvas, prompt_boxes, target_wh, cfg, want_masks=want_masks)
-            except torch.cuda.OutOfMemoryError:
-                torch.cuda.empty_cache()
-                tqdm.write(f"[warn] CUDA OOM on {img_path.name}; skipped "
-                           f"(lower cfg.inference.max_edge or cfg.exemplars.tile_max_edge)")
-                continue
-            except Exception as exc:
-                tqdm.write(f"[warn] {img_path.name} failed ({type(exc).__name__}: {exc}); skipped")
-                continue
-
-            if want_masks:
-                render_overlay(image, masks, boxes, gt_boxes, cfg).save(
-                    overlay_dir / f"{img_path.stem}_overlay.png")
-
-            # image.size is the resized target space segment_canvas clipped to,
-            # so the two can never drift apart.
-            n_lines = write_yolo_predictions(
-                pred_dir / f"{img_path.stem}.txt", boxes, scores, image.size, orig_wh, cfg)
+            lines, counts = [], {}
+            for c, tiles, text, gt_want in per_class:
+                progress.update(**{"class": c.name})
+                canvas, prompt_boxes, target_wh = compose(image, tiles, cfg.strip.side, cfg.strip.margin, cfg)
+                tag = "" if single else f"_{c.name}"
+                if n_done < cfg.debug.save_composites:
+                    save_canvas_debug(canvas, prompt_boxes, comp_dir / f"{img_path.stem}{tag}_canvas.png")
+                try:
+                    masks, boxes, scores, tile_hits = segment_canvas(
+                        processor, canvas, prompt_boxes, target_wh, cfg, want_masks=want_masks, text=text)
+                except torch.cuda.OutOfMemoryError:
+                    torch.cuda.empty_cache()
+                    tqdm.write(f"[warn] CUDA OOM on {img_path.name} ({c.name}); skipped "
+                               f"(lower cfg.inference.max_edge or cfg.exemplars.tile_max_edge)")
+                    continue
+                except Exception as exc:
+                    tqdm.write(f"[warn] {img_path.name} ({c.name}) failed "
+                               f"({type(exc).__name__}: {exc}); skipped")
+                    continue
+                if want_masks:
+                    render_overlay(image, masks, boxes, of_class(gt_all, gt_want), cfg).save(
+                        overlay_dir / f"{img_path.stem}{tag}_overlay.png")
+                # image.size is the resized target space segment_canvas clipped
+                # to, so the two can never drift apart.
+                cls_lines = to_yolo_lines(boxes, scores, image.size, orig_wh, cfg, class_name=c.name)
+                lines += cls_lines
+                n_inst += int(boxes.shape[0])
+                n_tile += tile_hits
+                counts[c.name] = {"n_pred": int(boxes.shape[0]), "n_written": len(cls_lines),
+                                  "n_dropped_in_strip": tile_hits,
+                                  "mean_score": float(scores.mean()) if scores.size else None}
+            n_lines = write_lines(pred_dir / f"{img_path.stem}.txt", lines)
 
             n_done += 1
-            n_inst += int(boxes.shape[0])
-            n_tile += tile_hits
             n_written += n_lines
+            progress.update(done=n_done)
             per_image.append({
                 "image": img_path.name,
                 "orig_wh": list(orig_wh),
                 "resized_wh": list(image.size),
-                "n_gt": len(gt_boxes),
-                "n_pred": int(boxes.shape[0]),
+                "n_gt": len(gt_all),
                 "n_written": n_lines,
-                "n_dropped_in_strip": tile_hits,
-                "mean_score": float(scores.mean()) if scores.size else None,
+                "classes": counts,
             })
 
             if n_done % 25 == 0:
                 torch.cuda.empty_cache()
 
         dt = time.time() - t0
-        print(f"\nprocessed {n_done} image(s) "
+        print(f"\nprocessed {n_done} image(s) x {len(classes)} class(es) "
               f"({n_inst} instances kept, {n_tile} dropped in the strip, "
               f"{dt / max(n_done, 1):.2f}s/image)")
         print(f"wrote {min(n_done, cfg.debug.save_overlays)} overlay(s) to {overlay_dir}")
@@ -704,24 +774,23 @@ def main(cfg):
         if n_inst and n_written < n_inst:
             print(f"[note] {n_inst - n_written} prediction(s) were dropped as degenerate "
                   f"(under 1px on an axis after scaling back to the original size)")
-        if n_done and n_tile / n_done < len(tiles) * 0.5:
-            print(f"[note] only {n_tile / max(n_done, 1):.1f} strip detections per image "
-                  f"against {len(tiles)} tiles -- if that is far below the tile count, "
-                  f"the model may not be recognising the pasted exemplars at all, which "
-                  f"would make the whole strip dead weight. Check composites/.")
 
+        all_tiles = [(c, t) for c, tiles, _, _ in per_class for t in tiles]
         run.manifest_path.write_text(json.dumps({
             "method": "pasted exemplar tiles",
-            "n_exemplars": len(tiles),
+            "n_exemplars": len(all_tiles),
             "exemplar_source": cfg.exemplars.source,
             "exemplar_seed": cfg.exemplars.seed,
             "exemplar_manifest": str(run.exemplar_manifest),
             "exemplar_set_name": manifest_meta["name"] if manifest_meta else None,
             "exemplar_set_updated": manifest_meta["updated"] if manifest_meta else None,
-            "exemplars": [{"source": t.source, "box_cxcywh_norm": list(t.box),
-                           "tile_px": list(t.size)} for t in tiles],
+            # every exemplar used, with its class; per class below as well
+            "exemplars": [{"source": t.source, "class": c.name, "box_cxcywh_norm": list(t.box),
+                           "tile_px": list(t.size)} for c, t in all_tiles],
+            "classes": [{"name": c.name, "text_prompt": text, "gt_class": gt_want,
+                         "n_exemplars": len(tiles)} for c, tiles, text, gt_want in per_class],
+            "class_name": classes[0].name,
             "text_prompt": cfg.inference.text_prompt,
-            "class_name": class_name,
             "gt_class": cfg.dataset.gt_class,
             "strip_side": cfg.strip.side,
             "tile_max_edge": cfg.exemplars.tile_max_edge,
@@ -737,8 +806,8 @@ def main(cfg):
             "anno_dir": str(anno_dir) if anno_dir else None,
             "predictions_dir": str(pred_dir),
             "prediction_format": ("class cx cy w h provenance quality score; class is "
-                                  "a name (class_name); cxcywh normalised against the "
-                                  "ORIGINAL image size"),
+                                  "a name (one of the run's classes); cxcywh normalised "
+                                  "against the ORIGINAL image size"),
             "prediction_provenance": cfg.predictions.provenance,
             "prediction_quality": cfg.predictions.quality,
             "images_processed": n_done,
@@ -747,6 +816,7 @@ def main(cfg):
             "strip_detections_dropped": n_tile,
             "per_image": per_image,
         }, indent=2, default=str))
+    progress.update(force=True, phase="done", done=n_done)
 
 
 def cli() -> None:
