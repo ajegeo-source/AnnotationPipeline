@@ -61,6 +61,14 @@ strip:
   margin: 8                   # px between tiles
   fill: [114, 114, 114]       # neutral grey for unused strip area
 inference:
+  prompt_mode: strip          # how every class is prompted:
+                              #   strip:    exemplars cut out and pasted beside the
+                              #             image - the same ones for every image
+                              #   in_image: the exemplars that lie on the image
+                              #             itself, where they are (SAM 3's own way);
+                              #             an image without any gets the text alone,
+                              #             or is skipped for a class with no text
+                              #   text:     the text prompt alone, no exemplars
   text_prompt: "crow"           # e.g. "rumex" to combine text + exemplars
   class_name: Rumex            # every prediction is written as this class; one
                               # word, and a class on the project's list in the
@@ -84,6 +92,8 @@ dataset:
 predictions:
   provenance: sam3
   quality: unverified
+  save_masks: true            # each prediction's mask, for the annotator to show
+                              # (b: boxes, masks or both); <stem>.masks.json
 debug:
   save_overlays: 50
   save_composites: 5

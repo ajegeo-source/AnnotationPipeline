@@ -80,6 +80,14 @@ own text - and all of them are written to the same file per image. Each
 should be a class on the project's list in the annotator, so that approving
 a prediction keeps its class; the run warns when one is not.
 
+How the classes are prompted is one choice per run (inference.prompt_mode):
+exemplar tiles pasted in a strip beside the image; the exemplar boxes that lie
+on the image itself, where they are; or the text prompt alone.
+
+Masks (predictions.save_masks) go next to each prediction file as
+<stem>.masks.json: one entry per prediction line, in the same order - its
+bounding box in the mask's pixel space and the runs inside it.
+
 Progress goes to <run>/progress.json as the run goes (phase, images done,
 total), which is how the annotator shows a run it launched. Fields 2-5 are YOLO geometry,
 normalised; fields 6-8 are the extra flags the annotation tool reads.
@@ -463,7 +471,7 @@ def segment_canvas(processor, canvas, prompt_boxes_px, target_wh, cfg, want_mask
 
 # ----------------------------- predictions ----------------------------------
 
-def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg, class_name=None):
+def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg, class_name=None, keep_index=False):
     """Scales resized-target xyxy pixels back to the ORIGINAL image and
     normalises to YOLO cxcywh.
 
@@ -474,11 +482,11 @@ def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg, class_name=None):
     w1, h1 = resized_wh
     w0, h0 = orig_wh
     if w1 <= 0 or h1 <= 0:
-        return []
+        return ([], []) if keep_index else []
     sx, sy = w0 / w1, h0 / h1
 
-    lines = []
-    for box, score in zip(np.asarray(boxes_px).reshape(-1, 4), np.asarray(scores).reshape(-1)):
+    lines, kept = [], []
+    for k, (box, score) in enumerate(zip(np.asarray(boxes_px).reshape(-1, 4), np.asarray(scores).reshape(-1))):
         x1, x2 = sorted((float(box[0]) * sx, float(box[2]) * sx))
         y1, y2 = sorted((float(box[1]) * sy, float(box[3]) * sy))
         x1, y1 = max(0.0, x1), max(0.0, y1)
@@ -491,7 +499,34 @@ def to_yolo_lines(boxes_px, scores, resized_wh, orig_wh, cfg, class_name=None):
             f"{(x2 - x1) / w0:.6f} {(y2 - y1) / h0:.6f} "
             f"{cfg.predictions.provenance} {cfg.predictions.quality} {float(score):.4f}"
         )
-    return lines
+        kept.append(k)
+    return (lines, kept) if keep_index else lines
+
+
+def encode_mask(mask: np.ndarray):
+    """A boolean mask as {"box": [x0, y0, w, h], "rle": [start, length, ...]}:
+    its bounding box, and the runs of set pixels inside it, row by row. Small
+    for plant-shaped masks, and quick to paint back in a browser. None for an
+    empty mask."""
+    ys, xs = np.nonzero(mask)
+    if ys.size == 0:
+        return None
+    y0, y1, x0, x1 = int(ys.min()), int(ys.max()) + 1, int(xs.min()), int(xs.max()) + 1
+    flat = mask[y0:y1, x0:x1].reshape(-1).astype(np.int8)
+    d = np.diff(np.concatenate(([0], flat, [0])))
+    starts, ends = np.flatnonzero(d == 1), np.flatnonzero(d == -1)
+    rle = np.empty(starts.size * 2, dtype=np.int64)
+    rle[0::2], rle[1::2] = starts, ends - starts
+    return {"box": [x0, y0, x1 - x0, y1 - y0], "rle": rle.tolist()}
+
+
+def write_masks(path: Path, size, masks) -> None:
+    """<stem>.masks.json: the masks of a prediction file, line for line, in the
+    resized image's pixel space (size)."""
+    tmp = path.with_name(f".{path.name}.tmp")
+    tmp.write_text(json.dumps({"version": 1, "size": list(size), "masks": masks},
+                              separators=(",", ":")))
+    tmp.replace(path)
 
 
 def write_lines(path: Path, lines) -> int:
@@ -654,8 +689,13 @@ def _main(cfg, project, run, progress):
         progress.update(force=True, phase="done", message="no images")
         return
 
-    # Each class: its exemplars, its tiles - built once, used on every image.
-    manifest_meta = read_manifest(run, image_dir) if cfg.exemplars.source == "manifest" else None
+    # Each class: what prompts it - strip tiles built once; in-image exemplars
+    # looked up per image; or nothing but its text.
+    mode = cfg.inference.prompt_mode
+    single = len(classes) == 1
+    print(f"prompting   =  {mode}")
+    manifest_meta = (read_manifest(run, image_dir)
+                     if mode != "text" and cfg.exemplars.source == "manifest" else None)
     tile_dir = run.tiles_dir
     tile_dir.mkdir(parents=True, exist_ok=True)
     for f in tile_dir.glob("tile_*.png"):  # this launch's tiles only, not a mix with the last
@@ -663,20 +703,48 @@ def _main(cfg, project, run, progress):
     per_class = []
     for c in classes:
         n = c.n or cfg.exemplars.n
-        if manifest_meta is not None:
-            picked = select_from_manifest(manifest_meta, c, n, len(classes) == 1, image_dir)
+        text = cfg.inference.text_for(c)
+        pc = {"c": c, "n": n, "text": text, "gt": gt_wanted(c, classes, cfg), "tiles": [], "by_image": None}
+        if mode == "text":
+            if not text:
+                raise SystemExit(f"prompt_mode is text, but {c.name} has no text prompt")
+            print(f"text only {c.name}: {text!r}")
+        elif mode == "in_image":
+            if manifest_meta is not None:
+                pc["by_image"] = {}
+                for e in manifest_meta.get("exemplars", []):
+                    if e.get("cls") == c.name or (single and e.get("cls") is None):
+                        pc["by_image"].setdefault(e["image"], []).append((e["cx"], e["cy"], e["w"], e["h"]))
+                if not pc["by_image"] and not text:
+                    raise SystemExit(f"no exemplars picked as {c.name!r} on any image, and no text "
+                                     f"prompt to fall back on")
+                print(f"in-image {c.name}: exemplars on {len(pc['by_image'])} image(s), up to {n} "
+                      f"per image" + (", text alone on the others" if text else ", others skipped"))
+            else:
+                print(f"in-image {c.name}: up to {n} gt/ box(es) of {pc['gt']!r} on each image"
+                      + (", text alone where there are none" if text else ""))
         else:
-            picked = select_random_gt(pairs, gt_wanted(c, classes, cfg), n, cfg.exemplars.seed,
-                                      anno_dir, c.name)
-        tiles = build_tiles(picked, cfg.exemplars.pad, cfg.exemplars.tile_max_edge, cfg.inference.max_edge)
-        prefix = "" if len(classes) == 1 else f"{c.name}_"
-        for i, t in enumerate(tiles):
-            t.image.save(tile_dir / f"tile_{prefix}{i:02d}_{Path(t.source).stem}.png")
-        origin = (f"set={manifest_meta['name']}" if manifest_meta else f"seed={cfg.exemplars.seed}")
-        print(f"exemplar strip {c.name}: {len(tiles)} tiles from "
-              f"{len({t.source for t in tiles})} image(s), "
-              f"source={cfg.exemplars.source}, {origin}")
-        per_class.append((c, tiles, cfg.inference.text_for(c), gt_wanted(c, classes, cfg)))
+            if manifest_meta is not None:
+                picked = select_from_manifest(manifest_meta, c, n, single, image_dir)
+            else:
+                picked = select_random_gt(pairs, pc["gt"], n, cfg.exemplars.seed, anno_dir, c.name)
+            pc["tiles"] = build_tiles(picked, cfg.exemplars.pad, cfg.exemplars.tile_max_edge, cfg.inference.max_edge)
+            prefix = "" if single else f"{c.name}_"
+            for i, t in enumerate(pc["tiles"]):
+                t.image.save(tile_dir / f"tile_{prefix}{i:02d}_{Path(t.source).stem}.png")
+            origin = (f"set={manifest_meta['name']}" if manifest_meta else f"seed={cfg.exemplars.seed}")
+            print(f"exemplar strip {c.name}: {len(pc['tiles'])} tiles from "
+                  f"{len({t.source for t in pc['tiles']})} image(s), "
+                  f"source={cfg.exemplars.source}, {origin}")
+        per_class.append(pc)
+
+    def image_prompts(pc, img_path, gt_all):
+        """In-image mode: the boxes on this image that prompt class pc."""
+        if pc["by_image"] is not None:
+            return pc["by_image"].get(img_path.name, [])[: pc["n"]]
+        mine = sorted(of_class(gt_all, pc["gt"]))
+        rng = random.Random(f"{cfg.exemplars.seed}:{img_path.name}:{pc['c'].name}")
+        return rng.sample(mine, min(pc["n"], len(mine)))
 
     targets = pairs
     if cfg.dataset.num_images is not None:
@@ -694,19 +762,20 @@ def _main(cfg, project, run, progress):
         return
     progress.update(force=True, phase="loading model", total=len(targets))
 
-    # report how much resolution the strip costs on the first image
-    probe, _ = load_image(targets[0][0], cfg)
-    probe_canvas, _, (pw, ph) = compose(probe, per_class[0][1], cfg.strip.side, cfg.strip.margin, cfg)
-    frac = (pw * ph) / (probe_canvas.width * probe_canvas.height)
-    print(f"canvas {probe_canvas.width}x{probe_canvas.height} vs target {pw}x{ph} "
-          f"-> the target keeps {frac:.0%} of the canvas area "
-          f"(the processor rescales the whole canvas to 1008x1008)")
+    if mode == "strip":
+        # report how much resolution the strip costs on the first image
+        probe, _ = load_image(targets[0][0], cfg)
+        probe_canvas, _, (pw, ph) = compose(probe, per_class[0]["tiles"], cfg.strip.side, cfg.strip.margin, cfg)
+        frac = (pw * ph) / (probe_canvas.width * probe_canvas.height)
+        print(f"canvas {probe_canvas.width}x{probe_canvas.height} vs target {pw}x{ph} "
+              f"-> the target keeps {frac:.0%} of the canvas area "
+              f"(the processor rescales the whole canvas to 1008x1008)")
 
     model, processor = build_model_and_processor(cfg)
     comp_dir = run.composites_dir
     if cfg.debug.save_composites:
         comp_dir.mkdir(parents=True, exist_ok=True)
-    single = len(classes) == 1
+    save_masks = cfg.predictions.save_masks
     progress.update(force=True, phase="predicting")
 
     with torch.inference_mode():
@@ -716,11 +785,22 @@ def _main(cfg, project, run, progress):
 
         for img_path, gt_all in tqdm(targets, desc="images"):
             image, orig_wh = load_image(img_path, cfg)
-            want_masks = n_done < cfg.debug.save_overlays
-            lines, counts = [], {}
-            for c, tiles, text, gt_want in per_class:
+            want_masks = save_masks or n_done < cfg.debug.save_overlays
+            lines, counts, mask_entries = [], {}, []
+            for pc in per_class:
+                c, text, gt_want = pc["c"], pc["text"], pc["gt"]
                 progress.update(**{"class": c.name})
-                canvas, prompt_boxes, target_wh = compose(image, tiles, cfg.strip.side, cfg.strip.margin, cfg)
+                used = []
+                if mode == "strip":
+                    canvas, prompt_boxes, target_wh = compose(image, pc["tiles"], cfg.strip.side, cfg.strip.margin, cfg)
+                else:
+                    canvas, target_wh, prompt_boxes = image, image.size, []
+                    if mode == "in_image":
+                        used = image_prompts(pc, img_path, gt_all)
+                        prompt_boxes = [norm_to_xyxy_px(b, *image.size) for b in used]
+                        if not prompt_boxes and not text:
+                            counts[c.name] = {"skipped": "no exemplar on this image and no text prompt"}
+                            continue
                 tag = "" if single else f"_{c.name}"
                 if n_done < cfg.debug.save_composites:
                     save_canvas_debug(canvas, prompt_boxes, comp_dir / f"{img_path.stem}{tag}_canvas.png")
@@ -741,14 +821,24 @@ def _main(cfg, project, run, progress):
                         overlay_dir / f"{img_path.stem}{tag}_overlay.png")
                 # image.size is the resized target space segment_canvas clipped
                 # to, so the two can never drift apart.
-                cls_lines = to_yolo_lines(boxes, scores, image.size, orig_wh, cfg, class_name=c.name)
+                cls_lines, kept = to_yolo_lines(boxes, scores, image.size, orig_wh, cfg,
+                                                class_name=c.name, keep_index=True)
                 lines += cls_lines
+                if save_masks:
+                    mask_entries += [encode_mask(masks[k]) if masks is not None else None for k in kept]
                 n_inst += int(boxes.shape[0])
                 n_tile += tile_hits
                 counts[c.name] = {"n_pred": int(boxes.shape[0]), "n_written": len(cls_lines),
                                   "n_dropped_in_strip": tile_hits,
                                   "mean_score": float(scores.mean()) if scores.size else None}
+                if mode == "in_image":
+                    counts[c.name]["prompts"] = [list(b) for b in used]
             n_lines = write_lines(pred_dir / f"{img_path.stem}.txt", lines)
+            mask_path = pred_dir / f"{img_path.stem}.masks.json"
+            if save_masks:
+                write_masks(mask_path, image.size, mask_entries)
+            elif mask_path.exists():
+                mask_path.unlink()             # it would describe the old lines
 
             n_done += 1
             n_written += n_lines
@@ -775,7 +865,7 @@ def _main(cfg, project, run, progress):
             print(f"[note] {n_inst - n_written} prediction(s) were dropped as degenerate "
                   f"(under 1px on an axis after scaling back to the original size)")
 
-        all_tiles = [(c, t) for c, tiles, _, _ in per_class for t in tiles]
+        all_tiles = [(pc["c"], t) for pc in per_class for t in pc["tiles"]]
         run.manifest_path.write_text(json.dumps({
             "method": "pasted exemplar tiles",
             "n_exemplars": len(all_tiles),
@@ -787,8 +877,14 @@ def _main(cfg, project, run, progress):
             # every exemplar used, with its class; per class below as well
             "exemplars": [{"source": t.source, "class": c.name, "box_cxcywh_norm": list(t.box),
                            "tile_px": list(t.size)} for c, t in all_tiles],
-            "classes": [{"name": c.name, "text_prompt": text, "gt_class": gt_want,
-                         "n_exemplars": len(tiles)} for c, tiles, text, gt_want in per_class],
+            "prompt_mode": mode,
+            "masks_saved": save_masks,
+            "classes": [{"name": pc["c"].name, "text_prompt": pc["text"], "gt_class": pc["gt"],
+                         "n_exemplars": (len(pc["tiles"]) if mode == "strip"
+                                         else pc["n"] if mode == "in_image" else 0),
+                         "exemplars_per": ("run" if mode == "strip" else
+                                           "image" if mode == "in_image" else None)}
+                        for pc in per_class],
             "class_name": classes[0].name,
             "text_prompt": cfg.inference.text_prompt,
             "gt_class": cfg.dataset.gt_class,

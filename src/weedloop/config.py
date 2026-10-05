@@ -428,6 +428,16 @@ class ClassRunCfg(Base):
 
 
 class InferenceCfg(Base):
+    # How SAM 3 is prompted, for every class of the run:
+    #   strip     the exemplars, cut out, pasted in a strip beside the image
+    #             and prompted there - exemplars can come from any image;
+    #   in_image  the exemplar boxes that lie on the image itself, prompted
+    #             where they are (SAM 3's own way) - per image, the first n
+    #             picked on it, or n of its gt/ boxes; an image without any
+    #             gets the class's text alone, or is skipped without one;
+    #   text      the class's text prompt alone, no exemplars.
+    # A text prompt, when a class has one, is added in every mode.
+    prompt_mode: Literal["strip", "in_image", "text"] = "strip"
     text_prompt: str | None = None
     # The class every prediction line of this run is written as - a name from
     # the project's class list, so that approving a prediction in the
@@ -505,6 +515,10 @@ class DatasetCfg(Base):
 class PredictionCfg(Base):
     provenance: str = "sam3"
     quality: str = "unverified"
+    # Each prediction's mask, next to its prediction file as <stem>.masks.json
+    # (run-length encoded, in the order of the lines), for the annotator to
+    # draw. Costs a copy of the masks off the GPU per image.
+    save_masks: bool = True
 
 
 class DebugCfg(Base):

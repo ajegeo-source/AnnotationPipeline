@@ -120,6 +120,10 @@
   .stage { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
   .stage img { display: block; width: 100%; height: 100%; user-select: none; }
   .stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+  /* sam3 masks: at the mask's own resolution, stretched with the photo. */
+  .stage canvas.masklayer { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .stage canvas.masklayer[hidden] { display: none; }
+  #predShow.nomasks { opacity: .5; }
 
   /* Hit testing is done in image coordinates against the box list, not by
      asking the DOM what was clicked, so nothing here needs pointer events. */
@@ -481,6 +485,19 @@
   .rf-cname i { width: 10px; height: 10px; border-radius: 2px; }
   .rf-picked { color: var(--dim); font: 12px var(--mono); }
   .rf-picked.none { color: #ffb01f; }
+  .rf-exbtn {
+    justify-self: start; padding: 1px 8px; border: 1px solid var(--line); border-radius: 2px;
+    background: var(--bg); color: var(--text); font: 12px/1.6 var(--mono); cursor: pointer; white-space: nowrap;
+  }
+  .rf-exbtn:hover, .rf-exbtn.on { border-color: var(--exem); }
+  .rf-exbtn.none { color: #ffb01f; }
+  .rf-exwrap { margin: 2px 0 10px 18px; padding: 8px 10px; border-left: 2px solid var(--exem); }
+  .rf-exwrap .ex-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); }
+  .rf-exwrap .ex-card img { height: 96px; }
+  .rf-exhead { display: flex; align-items: flex-start; gap: 12px; }
+  .rf-exhead .rf-note { flex: 1; }
+  .rf-exhead .badge, .ex-all { flex: none; white-space: nowrap; }
+  .ex-head .ex-all { margin-left: auto; padding: 0 7px; }
   .rf-cadd { margin-top: 6px; }
   .rf-adv summary { cursor: pointer; color: var(--dim); font-size: 12px; margin: 4px 0 8px; }
   .run-status { font-size: 12px; max-width: 46%; }
@@ -835,6 +852,7 @@
     <button class="badge" id="applyThresh">apply</button>
     <button class="badge approve" id="approve"
             title="copy every shown sam3 box into your annotations">approve</button>
+    <select id="predShow" class="picker" aria-label="Show sam3 predictions as"></select>
   </span>
   <button class="classchip flagchip" id="flagChip" type="button" aria-haspopup="menu" aria-expanded="false"><span id="flagChipName">no flags</span></button>
   <button class="classchip stagechip" id="stageChip" type="button" aria-haspopup="menu" aria-expanded="false"><i id="stageSwatch"></i><span id="stageChipName"></span></button>
@@ -844,6 +862,7 @@
 <div class="viewport" id="viewport">
   <div class="stage" id="stage">
     <img id="photo" alt="">
+    <canvas class="masklayer" id="maskLayer" hidden aria-hidden="true"></canvas>
     <svg id="svg" xmlns="http://www.w3.org/2000/svg"></svg>
   </div>
   <svg class="pointer-layer" id="pointerLayer" aria-hidden="true">
@@ -1013,6 +1032,8 @@ const el = {
   thresh: document.getElementById("thresh"),
   applyThresh: document.getElementById("applyThresh"),
   exemcount: document.getElementById("exemcount"),
+  maskLayer: document.getElementById("maskLayer"),
+  predShow: document.getElementById("predShow"),
   runBtn: document.getElementById("runBtn"),
   runState: document.getElementById("runState"),
   runDialog: document.getElementById("runDialog"),
@@ -1666,14 +1687,18 @@ function handles(b, color) {
 
 function render() {
   while (el.svg.firstChild) el.svg.removeChild(el.svg.firstChild);
+  renderMasks();
   if (boxesHidden || peeking) { renderCounts(0); return; }
 
   // Predictions first, so approved and hand-drawn boxes draw on top of them.
   let shown = 0;
   const predStyle = styleOf("prediction");
+  const masksOnly = predShow === "masks";
   preds.forEach((b, i) => {
     if (b.score < threshold) return;
     shown++;
+    // Shown as its mask only: the box comes back while it is selected.
+    if (masksOnly && maskOf(b) && !isSel("pred", i)) return;
     el.svg.appendChild(paint(rect(b, "pred"), predStyle, { selected: isSel("pred", i) }));
   });
   boxes.forEach((b, i) => {
@@ -1780,6 +1805,7 @@ async function load(i) {
   imageStage = data.stage;
   imageFlags = data.flags || [];
   flagNote = data.flag_note || "";
+  loadMasks(data);
   closeFlagMenu();
   const before = seenClasses.size;
   for (const b of boxes) seenClasses.add(b.cls);   // not predictions: "0" is not a class here
@@ -2196,6 +2222,8 @@ const COMMANDS = {
   "pan.down":          { screen: "editor", group: "View", label: "Pan down (hold; with shift, faster)",
                          kind: "hold", keys: ["ArrowDown", "Shift+ArrowDown"], scanView: true,
                          run: (down) => keyPanHold("down", down) },
+  "view.predShow":     { screen: "editor", group: "View", label: "sam3 predictions: boxes, masks, or both",
+                         keys: ["b"], scanSafe: true, run: () => cyclePredShow() },
   "view.fit":          { screen: "editor", group: "View", label: "Fit the image to the screen",
                          keys: ["0"], scanView: true, run: () => fitToViewport() },
   "view.boxes":        { screen: "editor", group: "View", label: "Show or hide all boxes",
@@ -6608,6 +6636,29 @@ function exemCard(e, caption, badge, onOpen, actions = [], dim = false) {
   return card;
 }
 
+/** Un-pick a whole list at once (a class), after asking. Their boxes stay.
+    True if they went. */
+async function unpickExemplars(list, what) {
+  if (!list.length) return false;
+  if (!window.confirm(`Un-pick all ${plural(list.length, "exemplar", "exemplars")} ${what}? `
+    + "Their boxes stay, as ordinary boxes.")) return false;
+  try {
+    const r = await fetch(BASE + "api/exemplars/drop?" + new URLSearchParams({ project, run }), {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ids: list.map((e) => e.id) }),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  } catch (err) {
+    flash(`Not un-picked: ${err.message}`);
+    return false;
+  }
+  await refreshExemplarSet();
+  if (view === "editor" && images[idx] && list.some((e) => e.image === images[idx].name) && await flush()) {
+    await load(idx);
+  }
+  return true;
+}
+
 /** Swap two exemplars in the set's order: "the first n" of a class are the
     ones a run uses. */
 async function moveExemplar(d, a, b) {
@@ -6676,6 +6727,15 @@ function renderExemPanel(d) {
     head.append(sw, g.inRun
       ? `${g.name}: ${plural(g.items.length, "exemplar", "exemplars")} picked, the run uses the first ${g.n}`
       : `${g.name}: ${plural(g.items.length, "exemplar", "exemplars")}, not a class of this run`);
+    if (g.items.length > 1) {
+      const all = h("button", "badge danger ex-all", "un-pick all");
+      all.type = "button";
+      all.title = `Un-pick every exemplar of ${g.name}; their boxes stay`;
+      all.addEventListener("click", async () => {
+        if (await unpickExemplars(g.items, `of ${g.name}`)) openExemPanel();
+      });
+      head.appendChild(all);
+    }
     frag.appendChild(head);
     if (g.inRun && !g.items.length) {
       frag.appendChild(h("p", "fp-note warn", d.source === "random_gt"
@@ -6782,6 +6842,8 @@ let runSettings = null;        // the last /api/run/settings
 let runDraft = null;           // the settings as edited, not yet saved
 let runDirty = false;
 let runPicked = {};            // class -> exemplars picked as it, for the class table
+let runPickedList = [];        // the run's exemplars, in pick order
+const runOpenClasses = new Set();   // classes whose exemplars are shown under their row
 let runPollTimer = 0;
 let runLastState = null;
 const RUN_ACTIVE = ["queued", "running", "cancelling"];
@@ -6849,14 +6911,90 @@ async function openRunDialog() {
   pollRun();
 }
 
+/** The run's exemplars, for the class table: counts, and the cards a class
+    shows when opened. */
+async function refreshRunExemplars() {
+  runPicked = {};
+  runPickedList = [];
+  try {
+    const e = await fetch(q("api/run-exemplars"));
+    if (e.ok) runPickedList = (await e.json()).picked;
+  } catch (err) { /* the counts just stay empty */ }
+  for (const x of runPickedList) runPicked[x.cls || ""] = (runPicked[x.cls || ""] || 0) + 1;
+}
+
+/** A class's exemplars: those picked as it - and, in a one-class run, those
+    picked before exemplars recorded a class, which that run uses too. */
+function exemplarsOf(name) {
+  const single = runDraft.inference.classes.length === 1;
+  return runPickedList.filter((x) => x.cls === name || (single && !x.cls));
+}
+
+async function runUnpick(e) {
+  if (!window.confirm(`Un-pick this exemplar (${e.image})? Its box stays, as an ordinary box.`)) return;
+  try {
+    const r = await fetch(BASE + `api/exemplar/${e.id}?` + new URLSearchParams({ project, run }), { method: "DELETE" });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  } catch (err) {
+    runMessage([`Not un-picked: ${err.message}`], true);
+    return;
+  }
+  await refreshExemplarSet();
+  if (view === "editor" && images[idx] && images[idx].name === e.image && await flush()) await load(idx);
+  await refreshRunExemplars();
+  renderRunForm();
+  runMessage([`Un-picked the exemplar on ${e.image}.`], false);
+}
+
+/** The cards under a class's row: every exemplar of the class, in the order
+    the run takes them; those past the class's n are dimmed - not used. */
+function classExemplars(c) {
+  const wrap = h("div", "rf-exwrap");
+  const list = exemplarsOf(c.name);
+  const n = c.n || runDraft.exemplars.n;
+  const mode = runDraft.inference.prompt_mode;
+  if (!list.length) {
+    wrap.appendChild(h("p", "rf-note", `No exemplars picked as ${c.name} yet: e, then a box, or a click on one of your boxes.`));
+    return wrap;
+  }
+  const head = h("div", "rf-exhead");
+  head.appendChild(h("p", "rf-note", mode === "in_image"
+    ? `Each image is prompted with up to ${n} of these that lie on it.`
+    : `The run uses the first ${n}${list.length > n ? "; the dimmed ones come after" : ""}. `
+      + "Their order is changed in the exemplar window (the count in the header)."));
+  const all = h("button", "badge danger", `un-pick all ${list.length}`);
+  all.type = "button";
+  all.dataset.f = `rs:class:${c.name}:unpickall`;
+  all.title = `Un-pick every exemplar of ${c.name}; their boxes stay`;
+  all.addEventListener("click", async () => {
+    if (!(await unpickExemplars(list, `of ${c.name}`))) return;
+    await refreshRunExemplars();
+    renderRunForm();
+    runMessage([`Un-picked all ${plural(list.length, "exemplar", "exemplars")} of ${c.name}.`], false);
+  });
+  head.appendChild(all);
+  wrap.appendChild(head);
+  const grid = h("div", "ex-grid");
+  list.forEach((e, k) => {
+    const name = e.image.replace(/\.[^.]+$/, "");
+    grid.appendChild(exemCard(e, `${k + 1} \u00b7 ${name}`, null, async () => {
+      if (runDirty && !window.confirm("The run's settings have changes that are not saved. Leave them?")) return;
+      runDirty = false;
+      el.runDialog.close();
+      openExemplar(e);
+    }, [["\u2715", "Un-pick: its box stays, as an ordinary box", () => runUnpick(e)]],
+    mode !== "in_image" && k >= n));
+  });
+  wrap.appendChild(grid);
+  return wrap;
+}
+
 async function loadRunSettings(defaults) {
   try {
     const r = await fetch(q("api/run/settings", defaults ? { defaults: "true" } : {}));
     if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     runSettings = await r.json();
-    const e = await fetch(q("api/run-exemplars"));
-    runPicked = {};
-    if (e.ok) for (const x of (await e.json()).picked) runPicked[x.cls || ""] = (runPicked[x.cls || ""] || 0) + 1;
+    await refreshRunExemplars();
   } catch (err) {
     el.runForm.replaceChildren(h("p", "keyhint warn", `The run's settings could not be read: ${err.message}`));
     return;
@@ -7070,11 +7208,13 @@ function rfColor(path) {
 
 function classTable() {
   const inf = runDraft.inference;
-  const gt = runDraft.exemplars.source === "random_gt";
+  const mode = inf.prompt_mode;
+  const gt = runDraft.exemplars.source === "random_gt" && mode !== "text";
   const wrap = h("div", "rf-classes");
   const head = h("div", "rf-crow rf-chead");
   head.append(h("span", "", "class"), h("span", "", "text prompt"),
-              h("span", "", "exemplars"), h("span", "", gt ? "gt/ class" : "picked"), h("span", "", ""));
+              h("span", "", mode === "text" ? "" : mode === "in_image" ? "per image" : "exemplars"),
+              h("span", "", mode === "text" ? "" : gt ? "gt/ class" : "picked"), h("span", "", ""));
   wrap.appendChild(head);
   inf.classes.forEach((c, k) => {
     const row = h("div", "rf-crow");
@@ -7082,18 +7222,44 @@ function classTable() {
     const sw = h("i");
     sw.style.background = classStyle(c.name).color;
     name.append(sw, c.name);
-    const n = rfNumber(["inference", "classes", k, "n"], { min: 1, nullable: true, placeholder: String(runDraft.exemplars.n) });
-    n.title = `How many exemplars of ${c.name} prompt it; empty: ${runDraft.exemplars.n}, the run's default`;
-    const extra = gt
-      ? rfText(["inference", "classes", k, "gt_class"], runDraft.inference.classes.length === 1 ? "any" : c.name)
-      : h("span", "rf-picked" + (runPicked[c.name] ? "" : " none"), runPicked[c.name] ? `${runPicked[c.name]} picked` : "none picked");
+    let n, extra;
+    if (mode === "text") {
+      n = h("span", "");
+      extra = h("span", "rf-picked" + (c.text_prompt || inf.text_prompt ? "" : " none"),
+                c.text_prompt || inf.text_prompt ? "text only" : "needs a text");
+    } else {
+      n = rfNumber(["inference", "classes", k, "n"], { min: 1, nullable: true, placeholder: String(runDraft.exemplars.n) });
+      n.title = mode === "in_image"
+        ? `At most this many of ${c.name}'s exemplars on an image prompt it there; empty: ${runDraft.exemplars.n}`
+        : `How many exemplars of ${c.name} prompt it; empty: ${runDraft.exemplars.n}, the run's default`;
+      if (gt) {
+        extra = rfText(["inference", "classes", k, "gt_class"], runDraft.inference.classes.length === 1 ? "any" : c.name);
+      } else {
+        // The count opens the class's exemplars under its row.
+        const count = exemplarsOf(c.name).length;
+        const open = runOpenClasses.has(c.name);
+        extra = h("button", "rf-exbtn" + (count ? "" : " none") + (open ? " on" : ""),
+                  `${count ? `${count} picked` : "none picked"} ${open ? "\u25b4" : "\u25be"}`);
+        extra.type = "button";
+        extra.dataset.f = `rs:class:${c.name}:exemplars`;
+        extra.setAttribute("aria-expanded", String(open));
+        extra.title = `Show the exemplars picked as ${c.name}`;
+        extra.addEventListener("click", () => {
+          if (runOpenClasses.has(c.name)) runOpenClasses.delete(c.name);
+          else runOpenClasses.add(c.name);
+          renderRunForm();
+        });
+      }
+    }
     const del = h("button", "badge", "\u2715");
     del.type = "button";
     del.title = `Do not predict ${c.name} in this run`;
     del.dataset.f = `rs:class:${c.name}:remove`;
     del.addEventListener("click", () => { inf.classes.splice(k, 1); runDirty = true; renderRunForm(); });
-    row.append(name, rfText(["inference", "classes", k, "text_prompt"], "none: exemplars only"), n, extra, del);
+    row.append(name, rfText(["inference", "classes", k, "text_prompt"],
+                            mode === "text" ? "needed: text only" : "none: exemplars only"), n, extra, del);
     wrap.appendChild(row);
+    if (!gt && mode !== "text" && runOpenClasses.has(c.name)) wrap.appendChild(classExemplars(c));
   });
   const add = h("div", "rf-cadd");
   const left = classList().filter((n) => !inf.classes.some((c) => c.name === n));
@@ -7127,18 +7293,41 @@ function renderRunForm() {
   if (!runDraft) return;
   const d = runDraft;
   const frag = document.createDocumentFragment();
+  const mode = d.inference.prompt_mode;
+  frag.appendChild(rfSection("Prompting",
+    rfRow("prompt with", rfSelect(["inference", "prompt_mode"], [
+      ["strip", "exemplars in a strip beside each image"],
+      ["in_image", "the exemplars on each image itself"],
+      ["text", "the text prompt alone"]], renderRunForm)),
+    h("p", "rf-note", {
+      strip: "Exemplars from any image are cut out and pasted in a strip beside every image, and "
+        + "prompted there: every image gets the same ones. A class's text prompt is added if it has one.",
+      in_image: "Each image is prompted with the exemplars that lie on it, where they are - SAM 3's own "
+        + "way: the first ones picked on it, or some of its own gt/ boxes. An image without any gets the "
+        + "class's text alone, or is skipped for that class if it has no text.",
+      text: "Each class's text prompt alone - no exemplars. Every class needs one.",
+    }[mode])));
   frag.appendChild(rfSection("Classes to predict",
     h("p", "rf-note", "Each class is prompted on its own - its exemplars, its text - and all are written "
       + "to the same predictions. A class needs exemplars picked as it (e, then a box, or a click on one "
       + "of your boxes), or gt/ boxes to sample."),
     classTable()));
-  frag.appendChild(rfSection("Exemplars",
-    rfRow("from", rfSelect(["exemplars", "source"], [["manifest", "the ones picked in the annotator"],
-      ...(runSettings.gt ? [["random_gt", "random boxes from gt/"]] : [])], renderRunForm)),
-    rfRow("per class", rfNumber(["exemplars", "n"], { min: 1 }), "unless a class says otherwise; the first ones picked"),
-    ...(d.exemplars.source === "random_gt" ? [rfRow("seed", rfNumber(["exemplars", "seed"], { nullable: true }), "which random boxes")] : []),
-    rfRow("padding", rfNumber(["exemplars", "pad"], { min: 0, step: 0.05 }), "context around each exemplar, times its size"),
-    rfRow("tile edge", rfNumber(["exemplars", "tile_max_edge"], { min: 16 }), "px, the most a pasted exemplar may measure")));
+  if (mode === "text") {
+    frag.appendChild(rfSection("Exemplars", h("p", "rf-note", "Not used: the classes are prompted with their text alone.")));
+  } else {
+    frag.appendChild(rfSection("Exemplars",
+      rfRow("from", rfSelect(["exemplars", "source"], [
+        ["manifest", mode === "in_image" ? "the ones picked on each image" : "the ones picked in the annotator"],
+        ...(runSettings.gt ? [["random_gt", mode === "in_image" ? "each image's own gt/ boxes, at random" : "random boxes from gt/"]] : [])],
+        renderRunForm)),
+      rfRow(mode === "in_image" ? "per image" : "per class", rfNumber(["exemplars", "n"], { min: 1 }),
+            mode === "in_image" ? "at most, per class and image, unless a class says otherwise"
+                                : "unless a class says otherwise; the first ones picked"),
+      ...(d.exemplars.source === "random_gt" ? [rfRow("seed", rfNumber(["exemplars", "seed"], { nullable: true }), "which random boxes")] : []),
+      ...(mode === "strip" ? [
+        rfRow("padding", rfNumber(["exemplars", "pad"], { min: 0, step: 0.05 }), "context around each exemplar, times its size"),
+        rfRow("tile edge", rfNumber(["exemplars", "tile_max_edge"], { min: 16 }), "px, the most a pasted exemplar may measure")] : [])));
+  }
   frag.appendChild(rfSection("Images",
     rfRow("how many", rfNumber(["dataset", "num_images"], { min: 1, nullable: true, placeholder: "all" }), "empty: every image; a number: a random subset"),
     rfRow("subset seed", rfNumber(["dataset", "image_seed"]), "which random subset"),
@@ -7147,12 +7336,15 @@ function renderRunForm() {
     rfRow("confidence", rfNumber(["inference", "conf_threshold"], { min: 0, max: 1, step: 0.01 }), "kept from this score; the editor can show fewer"),
     rfRow("image edge", rfNumber(["inference", "max_edge"], { min: 64 }), "px, images are scaled down to this before SAM 3"),
     rfCheck(["inference", "fast_prompt_append"], "append the exemplar prompts in one step")));
+  frag.appendChild(rfSection("Output",
+    rfCheck(["predictions", "save_masks"], "save each prediction's mask, to show in the editor (b: boxes, masks or both)")));
   const adv = h("details", "rf-adv");
-  adv.appendChild(h("summary", "", "advanced: the exemplar strip, debug output"));
-  adv.append(
+  adv.appendChild(h("summary", "", mode === "strip" ? "advanced: the exemplar strip, debug output" : "advanced: debug output"));
+  if (mode === "strip") adv.append(
     rfRow("strip side", rfSelect(["strip", "side"], [["auto", "auto (the long edge)"], ["right", "right"], ["bottom", "bottom"]])),
     rfRow("strip margin", rfNumber(["strip", "margin"], { min: 0 }), "px between tiles"),
-    rfRow("strip fill", (() => { const w = h("span", "rf-triple"); for (let k = 0; k < 3; k++) w.appendChild(rfNumber(["strip", "fill", k], { min: 0, max: 255 })); return w; })(), "RGB of the empty strip"),
+    rfRow("strip fill", (() => { const w = h("span", "rf-triple"); for (let k = 0; k < 3; k++) w.appendChild(rfNumber(["strip", "fill", k], { min: 0, max: 255 })); return w; })(), "RGB of the empty strip"));
+  adv.append(
     rfRow("overlays", rfNumber(["debug", "save_overlays"], { min: 0 }), "images to save an overlay for"),
     rfRow("composites", rfNumber(["debug", "save_composites"], { min: 0 }), "canvases to save"),
     rfRow("mask colour", rfColor(["debug", "mask_color"])),
@@ -7229,6 +7421,128 @@ el.runDefaults.addEventListener("click", () => {
 });
 el.runDup.addEventListener("click", duplicateRun);
 el.runDialog.addEventListener("cancel", (e) => { e.preventDefault(); closeRunDialog(); });
+
+// ---------------------------------------------------------------- prediction masks
+//
+// A run that saved masks (predictions.save_masks) has, next to each prediction
+// file, the mask of every line. They are painted on a canvas between the photo
+// and the boxes, in the sam3 colour, at the mask's own resolution and
+// stretched with the photo, so zoom and pan cost nothing. b (or the picker in
+// the header) shows the sam3 predictions as boxes, masks, or both; with masks
+// only, a prediction still shows its box while selected, and is selected by a
+// click inside it as before. An image without masks always shows boxes.
+
+const PRED_SHOW = [["both", "boxes + masks"], ["masks", "masks"], ["boxes", "boxes"]];
+const K_PREDSHOW = "al.predShow";
+let predShow = PRED_SHOW.some(([k]) => k === localStorage.getItem(K_PREDSHOW))
+  ? localStorage.getItem(K_PREDSHOW) : "both";
+let predMasks = null;          // {key, size: [w, h], masks}: the open image's, when its run saved them
+const maskTiles = new Map();   // "line:colour" -> a small canvas with that mask painted
+let maskSig = "";
+
+const maskKey = () => `${project}\u0000${run}\u0000${images[idx] ? images[idx].name : ""}`;
+const masksHere = () => !!(predMasks && predMasks.key === maskKey());
+/** Whether a prediction is drawn as a mask (and not, unless selected, as a box). */
+const maskOf = (p) => (masksHere() && p.line != null ? predMasks.masks[p.line] : null);
+
+/** Called by load() with the image's data: fetch its masks, if any. */
+async function loadMasks(data) {
+  predMasks = null;
+  maskTiles.clear();
+  maskSig = "";
+  renderPredShow();
+  if (!data.masks || !run) { renderMasks(); return; }
+  const key = maskKey();
+  try {
+    const r = await fetch(q(`api/masks/${encodeURIComponent(images[idx].name)}`));
+    if (!r.ok) throw new Error(`api/masks returned ${r.status}`);
+    const m = await r.json();
+    if (key !== maskKey()) return;               // another image meanwhile
+    predMasks = { key, size: m.size, masks: m.masks || [] };
+  } catch (err) {
+    console.warn("masks not loaded:", err.message);
+  }
+  renderPredShow();
+  render();
+}
+
+function maskTile(line, m, color) {
+  const k = `${line}:${color}`;
+  let c = maskTiles.get(k);
+  if (c) return c;
+  const [, , w, h] = m.box;
+  c = document.createElement("canvas");
+  c.width = w;
+  c.height = h;
+  const g = c.getContext("2d");
+  const img = g.createImageData(w, h);
+  const d = img.data;
+  const r = parseInt(color.slice(1, 3), 16), gr = parseInt(color.slice(3, 5), 16), b = parseInt(color.slice(5, 7), 16);
+  const rle = m.rle;
+  for (let i = 0; i < rle.length; i += 2) {
+    const end = (rle[i] + rle[i + 1]) * 4;
+    for (let p = rle[i] * 4; p < end; p += 4) {
+      d[p] = r; d[p + 1] = gr; d[p + 2] = b; d[p + 3] = 255;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  maskTiles.set(k, c);
+  return c;
+}
+
+/** Called by render(). Repaints only when what is to be shown changed. */
+function renderMasks() {
+  const c = el.maskLayer;
+  const on = masksHere() && predShow !== "boxes" && !boxesHidden && !peeking && view === "editor";
+  c.hidden = !on;
+  if (!on) { maskSig = ""; return; }
+  const color = styleOf("prediction").color;
+  const shown = [];
+  preds.forEach((p, i) => {
+    if (p.score >= threshold && maskOf(p)) shown.push([p.line, isSel("pred", i)]);
+  });
+  const sig = `${predMasks.key}|${color}|${shown.map(([l, s]) => l + (s ? "*" : "")).join(",")}`;
+  if (sig === maskSig) return;
+  maskSig = sig;
+  const [w, h] = predMasks.size;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; }
+  const g = c.getContext("2d");
+  g.clearRect(0, 0, w, h);
+  for (const [line, selected] of shown) {
+    const m = predMasks.masks[line];
+    g.globalAlpha = selected ? 0.62 : 0.36;
+    g.drawImage(maskTile(line, m, color), m.box[0], m.box[1]);
+  }
+  g.globalAlpha = 1;
+}
+
+function renderPredShow() {
+  if (!el.predShow.options.length) {
+    for (const [k, label] of PRED_SHOW) el.predShow.appendChild(new Option(label, k));
+  }
+  el.predShow.value = predShow;
+  const has = masksHere();
+  el.predShow.classList.toggle("nomasks", !has);
+  el.predShow.title = has
+    ? "sam3 predictions: as boxes, masks, or both (b)"
+    : "This run saved no masks for this image: its predictions show as boxes (b switches for images that have them)";
+}
+
+function setPredShow(v) {
+  predShow = v;
+  localStorage.setItem(K_PREDSHOW, v);
+  renderPredShow();
+  render();
+}
+
+function cyclePredShow() {
+  const order = PRED_SHOW.map(([k]) => k);
+  setPredShow(order[(order.indexOf(predShow) + 1) % order.length]);
+  flash(`sam3 predictions: ${PRED_SHOW.find(([k]) => k === predShow)[1]}`
+    + (masksHere() ? "" : " (no masks on this image)"));
+}
+
+el.predShow.addEventListener("change", () => { setPredShow(el.predShow.value); el.predShow.blur(); });
 
 // ---------------------------------------------------------------- small commands
 

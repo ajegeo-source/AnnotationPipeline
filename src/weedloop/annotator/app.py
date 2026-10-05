@@ -1535,6 +1535,19 @@ def _ensure_run_dir(project: Project, r: Run) -> None:
             "created": now(), "created_by": "annotator"}, indent=2) + "\n")
 
 
+@app.get("/api/masks/{name}")
+def get_masks(project: ProjectDep, run: RunDep, name: str) -> Response:
+    """The masks of an image's predictions (see predict.encode_mask), line for
+    line, as the SAM 3 script wrote them. 404 when the run saved none."""
+    r = _need_run(run)
+    image_path(project, name)
+    path = r.predictions_dir / f"{Path(name).stem}.masks.json"
+    if not path.is_file():
+        raise HTTPException(404, "no masks for this image in this run")
+    return FileResponse(path, media_type="application/json",
+                        headers={"Cache-Control": "no-cache"})
+
+
 @app.get("/api/run/settings")
 def get_run_settings(project: ProjectDep, run: RunDep, cfg: CfgDep, defaults: bool = False) -> dict:
     """The run's settings - its own if saved, else the YAML's - or, with
@@ -1729,9 +1742,26 @@ def preflight(project: Project, run: Run, settings: RunSettings) -> tuple[list[s
     """What stops a launch, and what is only worth a warning."""
     problems, warnings = [], []
     classes = settings.inference.run_classes()
+    inf = settings.inference
     if not classes:
         problems.append("no class to predict: add one in the run's settings")
-    if settings.exemplars.source == "manifest":
+    if inf.prompt_mode == "text":
+        for c in classes:
+            if not inf.text_for(c):
+                problems.append(f"text only, but {c.name} has no text prompt")
+    elif inf.prompt_mode == "in_image" and settings.exemplars.source == "manifest":
+        entries = read_exemplar_set(project, run).exemplars if run.exemplar_manifest.is_file() else []
+        for c in classes:
+            n = sum(1 for e in entries if e.cls == c.name or (len(classes) == 1 and e.cls is None))
+            if not n and not inf.text_for(c):
+                problems.append(f"no exemplars picked as {c.name} and no text prompt: nothing "
+                                f"would prompt it")
+            elif not n:
+                warnings.append(f"no exemplars picked as {c.name}: every image gets its text alone")
+    elif inf.prompt_mode == "in_image":
+        if project.gt_dir is None:
+            problems.append(f"exemplars from gt/, but {project.name} has no gt/ folder")
+    elif settings.exemplars.source == "manifest":
         entries = read_exemplar_set(project, run).exemplars if run.exemplar_manifest.is_file() else []
         for c in classes:
             n = sum(1 for e in entries
@@ -2087,7 +2117,11 @@ def get_annotation(project: ProjectDep, run: RunDep, name: str) -> dict:
         "width": width,
         "height": height,
         "boxes": [b.model_dump() for b in read_annotation(project, name)],
-        "predictions": [b.model_dump() for b in read_predictions(project, run, name)],
+        # "line": the prediction's place in its file, which is also its
+        # place in <stem>.masks.json.
+        "predictions": [{**b.model_dump(), "line": i}
+                        for i, b in enumerate(read_predictions(project, run, name))],
+        "masks": bool(run and (run.predictions_dir / f"{Path(name).stem}.masks.json").is_file()),
         "exemplars": exemplar_boxes(project, run, name),
         "stage": stage_of(image_stages(project), name, stage_defs(project)),
         "flags": flags_of(image_flag_entries(project), name)[0],
@@ -2597,6 +2631,29 @@ def order_exemplars(project: ProjectDep, run: RunDep, order: ExemplarOrder) -> d
     s.updated = now()
     write_exemplar_set(r, s)
     return {"count": len(s.exemplars)}
+
+
+class ExemplarIds(BaseModel):
+    ids: list[int] = Field(min_length=1)
+
+
+@app.post("/api/exemplars/drop")
+def drop_exemplars(project: ProjectDep, run: RunDep, req: ExemplarIds) -> dict:
+    """Un-pick many exemplars at once - a whole class - in one write. Their
+    annotations stay; they are still real plants."""
+    r = _need_run(run)
+    s = read_exemplar_set(project, r)
+    want = set(req.ids)
+    gone = [e for e in s.exemplars if e.id in want]
+    if not gone:
+        raise HTTPException(404, "none of these exemplars is in the set")
+    s.exemplars = [e for e in s.exemplars if e.id not in want]
+    s.updated = now()
+    write_exemplar_set(r, s)
+    log_server_event(project, "exemplar.drop", None, {
+        "run": r.name, "ids": [e.id for e in gone], "bulk": True,
+        "classes": sorted({e.cls or "" for e in gone}), "images": sorted({e.image for e in gone})})
+    return {"dropped": len(gone), "count": len(s.exemplars)}
 
 
 @app.delete("/api/exemplar/{exemplar_id}")
