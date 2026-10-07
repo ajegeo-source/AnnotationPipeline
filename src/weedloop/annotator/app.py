@@ -138,17 +138,20 @@ import socket
 import threading
 import time
 import uuid
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 import uvicorn
+import yaml
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, Response
 from PIL import Image, ImageOps
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from importlib.resources import files
 
+from weedloop.config import _safe_name
 from weedloop.config import (CLASS_NAME_MAX, IMAGE_SUFFIXES, Config, Project, Run, RunSettings,
                              class_token, config_for_run, load_config, read_run_settings,
                              valid_class_name, write_config, write_run_settings)
@@ -191,6 +194,7 @@ EVENT_TYPES = frozenset({
     "pred.approve", "pred.adjust", "pred.reject",
     "exemplar.pick", "exemplar.drop",
     "box.class", "box.paste", "image.stage", "image.flags", "run.launch", "run.cancel",
+    "project.import",
     "comment.add", "comment.edit", "comment.delete", "class.rename",
     "history.undo", "history.redo",
 })
@@ -2631,6 +2635,408 @@ def order_exemplars(project: ProjectDep, run: RunDep, order: ExemplarOrder) -> d
     s.updated = now()
     write_exemplar_set(r, s)
     return {"count": len(s.exemplars)}
+
+
+# --------------------------------------------------------------------------
+# Importing data. A folder on one of the allowed mounts (imports.roots) is
+# scanned - its shape, its images, what it holds besides - and then copied (or
+# linked) into the datasets folder: everything flat into one new project, or
+# each first-level subfolder as a project of its own. Both are background
+# jobs, held in memory: a restart of the annotator forgets their status, but
+# an import can simply be started again - files already there are skipped.
+# Labels are found and reported, not imported yet.
+# --------------------------------------------------------------------------
+
+JUNK_NAMES = {".ds_store", "thumbs.db", "desktop.ini"}
+LABEL_SUFFIXES = {".txt", ".json", ".xml", ".yaml", ".yml", ".csv"}
+_imports: dict[str, dict] = {}            # job id -> a scan or an import
+
+
+class _Cancelled(Exception):
+    pass
+
+
+def _import_roots(cfg: Config) -> list[Path]:
+    out = []
+    for r in cfg.imports.roots:
+        try:
+            out.append(r.resolve(strict=True))
+        except OSError:
+            pass
+    return out
+
+
+def _within(real: Path, roots: list[Path]) -> bool:
+    return any(real == r or r in real.parents for r in roots)
+
+
+def _allowed(cfg: Config, raw: str) -> Path:
+    """A folder imports may read: resolved to its real place (links followed),
+    which must lie under one of imports.roots."""
+    try:
+        real = Path(os.path.expandvars(raw)).expanduser().resolve(strict=True)
+    except OSError:
+        raise HTTPException(404, f"no such folder: {raw}")
+    if not real.is_dir():
+        raise HTTPException(422, f"not a folder: {real}")
+    roots = _import_roots(cfg)
+    if not _within(real, roots):
+        raise HTTPException(403, f"{real} is outside the folders imports may read from "
+                                 f"({', '.join(map(str, roots)) or 'none'}); add it to imports.roots")
+    return real
+
+
+@app.get("/api/import/browse")
+def import_browse(cfg: CfgDep, path: str = "") -> dict:
+    """The folders inside `path` (the allowed roots when empty), and how many
+    images lie directly in it."""
+    roots = _import_roots(cfg)
+    if not path:
+        return {"path": "", "parent": None, "images": 0,
+                "dirs": [{"name": str(r), "path": str(r)} for r in roots]}
+    real = _allowed(cfg, path)
+    dirs, n = [], 0
+    try:
+        with os.scandir(real) as it:
+            for e in it:
+                if e.name.startswith("."):
+                    continue
+                try:
+                    if e.is_dir():
+                        dirs.append(e.name)
+                    elif Path(e.name).suffix.lower() in IMAGE_SUFFIXES:
+                        n += 1
+                except OSError:
+                    continue
+    except OSError as exc:
+        raise HTTPException(403, f"cannot read {real}: {exc.strerror}") from exc
+    parent = "" if real in roots else str(real.parent) if _within(real.parent, roots) else ""
+    return {"path": str(real), "parent": parent, "images": n,
+            "dirs": [{"name": d, "path": str(real / d)} for d in sorted(dirs, key=str.lower)]}
+
+
+def _check_image(p: Path, max_px: float) -> tuple[str | None, int]:
+    """Why an image file cannot be imported, or None. Reads the header only:
+    the size of a decompression bomb is known before anything is decoded."""
+    try:
+        size = p.stat().st_size
+    except OSError as exc:
+        return ("a broken link" if p.is_symlink() else f"cannot be read ({exc.strerror})"), 0
+    if size == 0:
+        return "an empty file", 0
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", Image.DecompressionBombWarning)
+            with Image.open(p) as im:
+                w, h = im.size
+    except Image.DecompressionBombError:
+        return "a decompression bomb (far too many pixels)", size
+    except (OSError, ValueError, SyntaxError):
+        return "not an image a viewer can read", size
+    if w * h > max_px:
+        return f"too large ({w} x {h}, over {max_px / 1e6:.0f} megapixels)", size
+    return None, size
+
+
+def flat_names(rels: list[Path]) -> dict[Path, str]:
+    """The name each image gets in a flat project folder: its own name where
+    that is unique; where two would collide (every camera folder has an
+    IMG_0001.jpg), its folder path folded into it - plot3__IMG_0001.jpg - and,
+    should even that clash, a number."""
+    counts: dict[str, int] = {}
+    for r in rels:
+        counts[r.name] = counts.get(r.name, 0) + 1
+    out, taken = {}, set()
+    for r in rels:
+        name = "__".join(r.parts) if counts[r.name] > 1 and len(r.parts) > 1 else r.name
+        if name in taken:
+            stem, suf = os.path.splitext(name)
+            k = 2
+            while f"{stem}~{k}{suf}" in taken:
+                k += 1
+            name = f"{stem}~{k}{suf}"
+        taken.add(name)
+        out[r] = name
+    return out
+
+
+def _detect_layouts(root: Path, images: list[tuple[Path, int]], labels: list[Path]) -> list[dict]:
+    """What the folder looks like besides images: a project of this tool, a
+    YOLO, COCO or Pascal VOC dataset. Reported, so labels are not lost
+    unnoticed; converting them into gt/ is a later step."""
+    out = []
+    later = "Its labels are not imported yet - converting them into gt/ is the next step."
+    for base in [root] + [root / d for d in sorted({r.parts[0] for r, _ in images if len(r.parts) > 1})]:
+        if (base / "images").is_dir() and any((base / d).is_dir() for d in ("annotations", "gt", "runs")):
+            out.append({"kind": "project", "where": str(base.relative_to(root)) or ".",
+                        "note": "A project of this tool: only its images are imported; its "
+                                "annotations/, gt/ and runs/ are not copied."})
+    stems = {r.stem for r, _ in images}
+    yolo = [l for l in labels if l.suffix == ".txt" and "labels" in l.parts]
+    if yolo:
+        names = None
+        for cand in ("data.yaml", "dataset.yaml", "classes.txt", "obj.names"):
+            for f in [root / cand] + [root / r.parts[0] / cand for r in yolo[:1] if len(r.parts) > 1]:
+                if f.is_file():
+                    try:
+                        if f.suffix in (".yaml",):
+                            y = yaml.safe_load(f.read_text()) or {}
+                            n = y.get("names")
+                            names = list(n.values()) if isinstance(n, dict) else n
+                        else:
+                            names = [ln.strip() for ln in f.read_text().splitlines() if ln.strip()]
+                    except (OSError, ValueError, yaml.YAMLError):
+                        pass
+                if names:
+                    break
+            if names:
+                break
+        out.append({"kind": "yolo", "label_files": len(yolo),
+                    "images_with_labels": sum(1 for l in yolo if l.stem in stems),
+                    "classes": [str(n) for n in names] if names else None, "note": later})
+    for j in [l for l in labels if l.suffix == ".json"][:20]:
+        p = root / j
+        try:
+            if p.stat().st_size > 300_000_000:
+                continue
+            data = json.loads(p.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and "images" in data and "annotations" in data:
+            out.append({"kind": "coco", "file": str(j), "images": len(data.get("images") or []),
+                        "annotations": len(data.get("annotations") or []),
+                        "classes": [c.get("name") for c in data.get("categories") or [] if isinstance(c, dict)],
+                        "note": later})
+    xml = [l for l in labels if l.suffix == ".xml"]
+    if xml:
+        try:
+            head = (root / xml[0]).read_text(errors="replace")[:2000]
+        except OSError:
+            head = ""
+        if "<annotation" in head:
+            out.append({"kind": "voc", "label_files": len(xml), "note": later})
+    return out
+
+
+def _scan(job: dict, root: Path, cfg: Config) -> None:
+    try:
+        images: list[tuple[Path, int]] = []
+        rejected, labels = [], []
+        junk = other = 0
+        max_px = cfg.imports.max_megapixels * 1e6
+        for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+            dirnames[:] = sorted(d for d in dirnames if not d.startswith("."))
+            for fn in sorted(filenames):
+                if job["cancel"]:
+                    raise _Cancelled
+                job["seen"] += 1
+                if job["seen"] > cfg.imports.max_files:
+                    raise ValueError(f"more than {cfg.imports.max_files} files under this folder: "
+                                     f"pick a smaller one, or raise imports.max_files")
+                p = Path(dirpath) / fn
+                rel = p.relative_to(root)
+                if fn.lower() in JUNK_NAMES or fn.startswith("."):
+                    junk += 1                 # .DS_Store, Thumbs.db, macOS ._ files
+                    continue
+                suf = p.suffix.lower()
+                if suf in IMAGE_SUFFIXES:
+                    reason, size = _check_image(p, max_px)
+                    if reason:
+                        rejected.append({"file": str(rel), "reason": reason})
+                    else:
+                        images.append((rel, size))
+                elif suf in LABEL_SUFFIXES:
+                    labels.append(rel)
+                else:
+                    other += 1
+        groups: dict[str, list] = {}
+        for rel, size in images:
+            groups.setdefault(rel.parts[0] if len(rel.parts) > 1 else "", []).append((rel, size))
+
+        def renamed(rels: list[Path]) -> int:
+            names = flat_names(rels)
+            return sum(1 for r in rels if names[r] != r.name)
+
+        shape = ("empty" if not images else "flat" if set(groups) == {""}
+                 else "nested" if "" not in groups else "mixed")
+        dest_free = shutil.disk_usage(cfg.paths.root).free
+        job["files"] = images
+        job["report"] = {
+            "path": str(root), "name": root.name, "shape": shape,
+            "images": len(images), "bytes": sum(s for _, s in images),
+            "deepest": max((len(r.parts) - 1 for r, _ in images), default=0),
+            "renamed_flat": renamed([r for r, _ in images]),
+            "groups": [{"folder": g, "images": len(items), "bytes": sum(s for _, s in items),
+                        "deeper": any(len(r.parts) > 2 for r, _ in items),
+                        "renamed": renamed([Path(*r.parts[1:]) if g else r for r, _ in items])}
+                       for g, items in sorted(groups.items(), key=lambda kv: kv[0].lower())],
+            "rejected": rejected[:300], "rejected_total": len(rejected),
+            "junk": junk, "other": other, "label_files": len(labels),
+            "layouts": _detect_layouts(root, images, labels),
+            "free": dest_free, "dest": display_path(cfg.paths.root),
+        }
+        job["state"] = "done"
+    except _Cancelled:
+        job["state"] = "cancelled"
+    except Exception as exc:                 # a scan must end in a state, whatever happens
+        job["state"], job["error"] = "failed", str(exc)
+
+
+def _public(job: dict) -> dict:
+    return {k: v for k, v in job.items() if k not in ("files", "cancel", "plan")}
+
+
+@app.post("/api/import/scan")
+def import_scan(cfg: CfgDep, path: str) -> dict:
+    real = _allowed(cfg, path)
+    job = {"id": uuid.uuid4().hex[:12], "kind": "scan", "path": str(real), "state": "running",
+           "seen": 0, "report": None, "error": None, "cancel": False, "files": None}
+    _imports[job["id"]] = job
+    threading.Thread(target=_scan, args=(job, real, cfg), daemon=True).start()
+    return _public(job)
+
+
+class ImportTarget(BaseModel):
+    folder: str | None = None        # per_folder: the first-level folder ("" = files at the top)
+    name: str
+
+
+class ImportStart(BaseModel):
+    scan: str
+    mode: Literal["flat", "per_folder"]
+    link: bool = False
+    targets: list[ImportTarget] = Field(min_length=1)
+
+
+def _do_import(job: dict, plan: list[tuple[str, list[tuple[Path, Path, str]]]], cfg: Config,
+               root: Path, link: bool) -> None:
+    try:
+        for name, items in plan:
+            pdir = cfg.paths.root / name
+            img = pdir / "images"
+            img.mkdir(parents=True, exist_ok=True)
+            record = {"source": str(root), "mode": job["mode"], "link": link, "by": ACTOR,
+                      "started": now(), "finished": None, "files": []}
+            (pdir / "import.json").write_text(json.dumps(record, indent=1))
+            added = skipped = failed = 0
+            problems = []
+            for src, rel, dest_name in items:
+                if job["cancel"]:
+                    raise _Cancelled
+                job["current"] = name
+                dest = img / dest_name
+                try:
+                    if dest.exists() or dest.is_symlink():
+                        same = (dest.is_symlink() and os.readlink(dest) == str(src)) if link \
+                            else dest.stat().st_size == src.stat().st_size
+                        if same:
+                            skipped += 1        # an earlier import got this far
+                        else:
+                            failed += 1
+                            problems.append(f"{dest_name}: a different file is already there")
+                    elif link:
+                        os.symlink(src, dest)
+                        added += 1
+                    else:
+                        tmp = img / f".{dest_name}.part"     # never listed as an image
+                        shutil.copy2(src, tmp)
+                        os.replace(tmp, dest)
+                        added += 1
+                    record["files"].append({"source": str(rel), "name": dest_name})
+                except OSError as exc:
+                    failed += 1
+                    problems.append(f"{rel}: {exc.strerror or exc}")
+                job["done"] += 1
+                try:
+                    job["bytes_done"] += src.stat().st_size
+                except OSError:
+                    pass
+            record["finished"] = now()
+            record.update(added=added, skipped=skipped, failed=failed, problems=problems[:200])
+            (pdir / "import.json").write_text(json.dumps(record, indent=1))
+            try:
+                log_server_event(cfg.project(name), "project.import", None,
+                                 {"source": str(root), "mode": job["mode"], "link": link,
+                                  "added": added, "skipped": skipped, "failed": failed})
+            except (OSError, ValueError, FileNotFoundError):
+                pass
+            job["results"].append({"name": name, "added": added, "skipped": skipped,
+                                   "failed": failed, "problems": problems[:20]})
+        job["state"] = "done"
+    except _Cancelled:
+        job["state"] = "cancelled"
+    except Exception as exc:
+        job["state"], job["error"] = "failed", str(exc)
+    finally:
+        job["current"] = None
+
+
+@app.post("/api/import/start")
+def import_start(cfg: CfgDep, req: ImportStart) -> dict:
+    """Import what a scan found. New projects only - or one this same source
+    was imported into before, which is how an interrupted import resumes."""
+    scan = _imports.get(req.scan)
+    if not scan or scan["kind"] != "scan" or scan["state"] != "done":
+        raise HTTPException(409, "scan the folder first")
+    if any(j["kind"] == "import" and j["state"] == "running" for j in _imports.values()):
+        raise HTTPException(409, "another import is running; wait for it, or cancel it")
+    root = Path(scan["path"])
+    names = [t.name for t in req.targets]
+    if len(set(names)) != len(names):
+        raise HTTPException(422, "two of the new projects have the same name")
+    for t in req.targets:
+        try:
+            _safe_name("project", t.name)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+        pdir = cfg.paths.root / t.name
+        if pdir.exists():
+            prev = _read_json(pdir / "import.json") or {}
+            if prev.get("source") != str(root):
+                raise HTTPException(409, f"there is already a project called {t.name}")
+    files = scan["files"]
+    plan = []
+    if req.mode == "flat":
+        rels = [r for r, _ in files]
+        names_ = flat_names(rels)
+        plan.append((req.targets[0].name, [(root / r, r, names_[r]) for r in rels]))
+    else:
+        for t in req.targets:
+            g = t.folder or ""
+            mine = [r for r, _ in files if (r.parts[0] if len(r.parts) > 1 else "") == g]
+            inner = [Path(*r.parts[1:]) if g else r for r in mine]
+            names_ = flat_names(inner)
+            plan.append((t.name, [(root / r, r, names_[i]) for r, i in zip(mine, inner)]))
+    sizes = dict((str(r), s) for r, s in files)
+    total_bytes = sum(sizes[str(rel)] for _, items in plan for _, rel, _ in items)
+    if not req.link and total_bytes > shutil.disk_usage(cfg.paths.root).free * 0.95:
+        raise HTTPException(507, f"not enough space in {display_path(cfg.paths.root)} for "
+                                 f"{total_bytes / 1e9:.1f} GB; link instead, or free some")
+    job = {"id": uuid.uuid4().hex[:12], "kind": "import", "mode": req.mode, "link": req.link,
+           "source": str(root), "state": "running", "cancel": False, "error": None,
+           "total": sum(len(items) for _, items in plan), "done": 0,
+           "bytes_total": total_bytes, "bytes_done": 0, "current": None, "results": [],
+           "projects": [name for name, _ in plan]}
+    _imports[job["id"]] = job
+    threading.Thread(target=_do_import, args=(job, plan, cfg, root, req.link), daemon=True).start()
+    return _public(job)
+
+
+@app.get("/api/import/job")
+def import_job(id: str) -> dict:
+    job = _imports.get(id)
+    if not job:
+        raise HTTPException(404, "no such job (the annotator may have restarted)")
+    return _public(job)
+
+
+@app.post("/api/import/cancel")
+def import_cancel(id: str) -> dict:
+    job = _imports.get(id)
+    if not job:
+        raise HTTPException(404, "no such job")
+    job["cancel"] = True
+    return _public(job)
 
 
 class ExemplarIds(BaseModel):

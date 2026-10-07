@@ -561,10 +561,26 @@ class LauncherCfg(Base):
     slurm: SlurmCfg = SlurmCfg()
 
 
+class ImportCfg(Base):
+    """Bringing data in from the annotator: which folders it may read from,
+    and what it refuses. Paths are resolved to their real location, so a link
+    cannot lead out of these."""
+
+    roots: list[Path] = Field(default_factory=lambda: [Path("~")])   # e.g. [~, /agroscope/Data-Work-RE]
+    max_megapixels: float = Field(200, gt=0)   # bigger images are refused: decompression bombs
+    max_files: int = Field(200_000, ge=1)      # a scan stops past this many files
+
+    @field_validator("roots", mode="after")
+    @classmethod
+    def _expand_all(cls, v: list[Path]) -> list[Path]:
+        return [_expand(p) for p in v]
+
+
 class Config(Base):
     paths: PathsCfg
     annotator: AnnotatorCfg = AnnotatorCfg()
     launcher: LauncherCfg = LauncherCfg()
+    imports: ImportCfg = ImportCfg()
     run: RunCfg = RunCfg()
     exemplars: ExemplarCfg = ExemplarCfg()
     strip: StripCfg = StripCfg()

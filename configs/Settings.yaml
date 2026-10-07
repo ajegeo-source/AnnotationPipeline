@@ -25,6 +25,12 @@ annotator:
   require_token: true         # every request needs the token in the link printed
                               # at start-up; the OOD login covers the proxy, not
                               # the node's port. Off only on a machine of your own.
+imports:                      # "import..." on the projects page: folders it may read
+  roots:                      # data is imported from; links cannot lead out of these
+    - $HOME                   # (not ~: in YAML a bare ~ means "nothing")
+    - /agroscope/Data-Work-RE
+  max_megapixels: 200         # bigger images are refused (decompression bombs)
+  max_files: 200000           # a scan stops past this many files
 launcher:
   mode: local                 # local: in the annotator's own session (your salloc
                               #   session on the GPU node), at once; the run ends

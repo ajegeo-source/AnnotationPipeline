@@ -498,6 +498,31 @@
   .rf-exhead .rf-note { flex: 1; }
   .rf-exhead .badge, .ex-all { flex: none; white-space: nowrap; }
   .ex-head .ex-all { margin-left: auto; padding: 0 7px; }
+  /* ------------------------------------------------ importing */
+  .importdialog { width: min(760px, 94vw); }
+  #importStatus.warn { color: #ffb01f; }
+  .imp-pathrow { display: flex; gap: 8px; margin: 6px 0 10px; }
+  .imp-path { flex: 1; padding: 4px 8px; font: 12px var(--mono); }
+  .imp-dirs { display: flex; flex-direction: column; max-height: 300px; overflow: auto;
+              border: 1px solid var(--line); border-radius: 3px; padding: 4px; }
+  .imp-dir { text-align: left; padding: 5px 8px; border: 0; border-radius: 2px; background: none;
+             color: var(--text); font: 12px/1.5 var(--mono); cursor: pointer; }
+  .imp-dir:hover, .imp-dir:focus-visible { background: rgba(255, 255, 255, .06); outline: none; }
+  .imp-dir.up { color: var(--dim); }
+  .imp-big { font-weight: 600; margin: 4px 0 8px; word-break: break-all; }
+  .imp-layout { margin: 8px 0; padding: 8px 10px; border-left: 2px solid #8ecbff; background: var(--bg); font-size: 12px; line-height: 1.5; }
+  .imp-rejected { margin: 8px 0; font-size: 12px; }
+  .imp-rejected summary { cursor: pointer; color: #ffb01f; }
+  .imp-rejected div { font-family: var(--mono); color: var(--dim); padding: 1px 0 1px 14px; word-break: break-all; }
+  .imp-how { display: flex; flex-direction: column; gap: 6px; margin: 14px 0 8px; }
+  .imp-radio { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+  .imp-radio.disabled { color: var(--dim); cursor: default; }
+  .imp-folders { border: 1px solid var(--line); border-radius: 3px; padding: 6px 8px; max-height: 300px; overflow: auto; }
+  .imp-frow { display: grid; grid-template-columns: 22px 1fr 130px 220px; align-items: center; gap: 8px; padding: 3px 0; }
+  .imp-fhead { color: var(--dim); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .imp-fname { font: 12px var(--mono); word-break: break-all; }
+  .imp-result { margin: 6px 0; font-size: 13px; }
+  .imp-result a { color: #8ecbff; font-family: var(--mono); }
   .rf-cadd { margin-top: 6px; }
   .rf-adv summary { cursor: pointer; color: var(--dim); font-size: 12px; margin: 4px 0 8px; }
   .run-status { font-size: 12px; max-width: 46%; }
@@ -776,6 +801,8 @@
            autocomplete="off" spellcheck="false" aria-label="Filter projects by name">
     <label class="sortctl">sort <select id="projSort" class="picker" aria-label="Sort projects by"></select></label>
     <button class="badge" id="projSortDir" type="button" aria-label="Sort direction"></button>
+    <span class="spacer"></span>
+    <button class="badge primary" id="importBtn" type="button" title="Bring a folder from the cluster in as new projects">import&hellip;</button>
   </div>
   <div class="scroll">
     <div class="cards" id="projectCards"></div>
@@ -913,6 +940,21 @@
 <div class="classmenu" id="flagMenu" role="menu" hidden></div>
 <div class="filterpanel exempanel" id="exemPanel" role="dialog" aria-label="The run's exemplars" hidden></div>
 <div class="filterpanel" id="filterPanel" role="dialog" aria-label="Filter images by content" hidden></div>
+
+<dialog class="keys importdialog" id="importDialog" aria-labelledby="importTitle">
+  <header class="keys-head">
+    <h2 id="importTitle">Import data</h2>
+    <span class="dialog-spacer"></span>
+    <button class="badge" id="importClose" type="button">close</button>
+  </header>
+  <div class="keys-body" id="importBody"></div>
+  <footer class="keys-foot">
+    <span class="run-status" id="importStatus" aria-live="polite"></span>
+    <span class="dialog-spacer"></span>
+    <button class="badge" id="importBack" type="button" hidden>back</button>
+    <button class="badge primary" id="importGo" type="button">scan this folder</button>
+  </footer>
+</dialog>
 
 <dialog class="keys rundialog" id="runDialog" aria-labelledby="runTitle">
   <header class="keys-head">
@@ -1114,6 +1156,13 @@ const el = {
   projSearch: document.getElementById("projSearch"),
   projSort: document.getElementById("projSort"),
   projSortDir: document.getElementById("projSortDir"),
+  importBtn: document.getElementById("importBtn"),
+  importDialog: document.getElementById("importDialog"),
+  importBody: document.getElementById("importBody"),
+  importStatus: document.getElementById("importStatus"),
+  importBack: document.getElementById("importBack"),
+  importGo: document.getElementById("importGo"),
+  importClose: document.getElementById("importClose"),
   filterPanel: document.getElementById("filterPanel"),
   selNone: document.getElementById("selNone"),
   selCount: document.getElementById("selCount"),
@@ -2503,6 +2552,7 @@ function pointerCtx(e) {
 window.addEventListener("keydown", (e) => {
   if (el.keysDialog.open) return;            // the settings dialog owns the keys
   if (el.runDialog.open) return;             // so does the run window
+  if (el.importDialog.open) return;          // and the import window
   const t = e.target;
   if (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT"
       || t.isContentEditable) return;
@@ -2529,7 +2579,7 @@ window.addEventListener("blur", releaseAll);
 window.addEventListener("mousedown", (e) => {
   swallow = null;                            // a new press: the last one is over
   if (el.keysDialog.open) { captureMouse(e); return; }
-  if (el.runDialog.open) return;             // the run window is not the editor
+  if (el.runDialog.open || el.importDialog.open) return;   // windows are not the editor
   const input = mouseInputOf(e);
   if (!input) return;
   if (inputClass(input) === "click" && !overImage(e)) return;
@@ -7543,6 +7593,391 @@ function cyclePredShow() {
 }
 
 el.predShow.addEventListener("change", () => { setPredShow(el.predShow.value); el.predShow.blur(); });
+
+// ---------------------------------------------------------------- importing data
+//
+// "import…" on the projects page brings a folder from one of the mounts the
+// YAML allows (imports.roots) into the datasets folder: pick it (browse or
+// type a path), scan it - its shape, its images, what else it holds, what is
+// refused and why - then copy (or link) it: everything flat into one new
+// project, or each first-level subfolder as a project of its own. The work
+// happens on the server, at file-system speed, not through the browser.
+
+const K_IMPORT_PATH = "al.importPath";
+const imp = {
+  step: "pick",                // pick | scanning | report | importing | done
+  path: localStorage.getItem(K_IMPORT_PATH) || "",
+  browse: null,                // the last /api/import/browse
+  scan: null,                  // the scan job: {id, state, seen, report, error}
+  job: null,                   // the import job
+  mode: "flat",
+  link: false,
+  flatName: "",
+  folders: {},                 // folder -> {on, name}
+  timer: 0,
+};
+
+function fmtBytes(n) {
+  if (n == null) return "";
+  if (n < 1e6) return `${Math.max(1, Math.round(n / 1e3))} kB`;
+  if (n < 1e9) return `${(n / 1e6).toFixed(n < 1e7 ? 1 : 0)} MB`;
+  return `${(n / 1e9).toFixed(1)} GB`;
+}
+
+function importMessage(text, warn) {
+  el.importStatus.textContent = text || "";
+  el.importStatus.classList.toggle("warn", !!warn);
+}
+
+function openImport() {
+  if (imp.job && imp.job.state === "running") imp.step = "importing";
+  else if (imp.step === "done" || imp.step === "importing") imp.step = "pick";
+  el.importDialog.showModal();
+  renderImport();
+  if (imp.step === "pick") browseTo(imp.path);
+  if (imp.step === "importing") pollImport();
+}
+
+function closeImport() {
+  if (imp.step === "scanning") cancelImportJob(imp.scan);
+  clearTimeout(imp.timer);
+  el.importDialog.close();
+}
+
+async function api(path, opts) {
+  const r = await fetch(BASE + path, opts);
+  const body = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof body.detail === "string" ? body.detail : `${r.status}`);
+  return body;
+}
+
+async function browseTo(path) {
+  try {
+    imp.browse = await api("api/import/browse?" + new URLSearchParams({ path: path || "" }));
+    imp.path = imp.browse.path || "";
+    importMessage("");
+  } catch (err) {
+    importMessage(err.message, true);
+    if (path) { imp.path = ""; imp.browse = await api("api/import/browse").catch(() => null); }
+  }
+  renderImport();
+}
+
+// ---------------------------------------------------------------- steps
+
+async function startScan() {
+  if (!imp.path) return;
+  localStorage.setItem(K_IMPORT_PATH, imp.path);
+  try {
+    imp.scan = await api("api/import/scan?" + new URLSearchParams({ path: imp.path }), { method: "POST" });
+    imp.step = "scanning";
+    renderImport();
+    pollImport();
+  } catch (err) {
+    importMessage(err.message, true);
+  }
+}
+
+async function pollImport() {
+  clearTimeout(imp.timer);
+  const job = imp.step === "scanning" ? imp.scan : imp.job;
+  if (!job || !el.importDialog.open) return;
+  try {
+    const fresh = await api("api/import/job?" + new URLSearchParams({ id: job.id }));
+    if (imp.step === "scanning") imp.scan = fresh; else imp.job = fresh;
+    if (fresh.state === "running") {
+      imp.timer = setTimeout(pollImport, 600);
+    } else if (imp.step === "scanning") {
+      if (fresh.state === "done") { prepareChoices(fresh.report); imp.step = "report"; importMessage(""); }
+      else { imp.step = "pick"; importMessage(fresh.state === "failed" ? `The scan failed: ${fresh.error}` : "Scan cancelled.", fresh.state === "failed"); }
+    } else {
+      imp.step = "done";
+      await fetchProjects();
+      renderProjects();
+    }
+  } catch (err) {
+    importMessage(err.message, true);
+  }
+  renderImport();
+}
+
+function suggestName(name) {
+  let base = (name || "imported").replace(/[\\/\u0000]/g, "_").trim() || "imported";
+  if (base === "." || base === "..") base = "imported";
+  const taken = new Set(projects.map((p) => p.name));
+  let n = base;
+  for (let k = 2; taken.has(n); k++) n = `${base}_${k}`;
+  return n;
+}
+
+function prepareChoices(report) {
+  imp.mode = report.shape === "nested" ? "per_folder" : "flat";
+  imp.link = false;
+  imp.flatName = suggestName(report.name);
+  imp.folders = {};
+  for (const g of report.groups) {
+    imp.folders[g.folder] = { on: true, name: suggestName(g.folder || report.name) };
+  }
+}
+
+function targets() {
+  if (imp.mode === "flat") return [{ name: imp.flatName.trim() }];
+  return imp.scan.report.groups.filter((g) => imp.folders[g.folder].on)
+    .map((g) => ({ folder: g.folder, name: imp.folders[g.folder].name.trim() }));
+}
+
+/** What is wrong with the chosen names, as the server would see it. */
+function nameProblems() {
+  const t = targets();
+  const out = [];
+  if (!t.length) out.push("Pick at least one folder.");
+  const seen = new Set();
+  for (const { name } of t) {
+    if (!name) out.push("A project needs a name.");
+    else if (/[\\/\u0000]/.test(name) || name === "." || name === "..") out.push(`${name}: no / or \\ in a name.`);
+    else if (seen.has(name)) out.push(`${name}: two projects would have that name.`);
+    seen.add(name);
+  }
+  return out;
+}
+
+async function startImport() {
+  const problems = nameProblems();
+  if (problems.length) { importMessage(problems[0], true); return; }
+  try {
+    imp.job = await api("api/import/start", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ scan: imp.scan.id, mode: imp.mode, link: imp.link, targets: targets() }),
+    });
+    imp.step = "importing";
+    importMessage("");
+    renderImport();
+    pollImport();
+  } catch (err) {
+    importMessage(err.message, true);
+  }
+}
+
+async function cancelImportJob(job) {
+  if (!job) return;
+  try { await api("api/import/cancel?" + new URLSearchParams({ id: job.id }), { method: "POST" }); } catch (err) { /* it ends anyway */ }
+}
+
+// ---------------------------------------------------------------- rendering
+
+function renderImport() {
+  const body = document.createDocumentFragment();
+  const go = el.importGo, back = el.importBack;
+  back.hidden = true;
+  go.disabled = false;
+  if (imp.step === "pick") {
+    body.appendChild(h("p", "rf-note", "A folder on one of the mounts the YAML allows (imports.roots). "
+      + "Nothing is copied yet: a scan comes first, and shows what would be imported."));
+    const row = h("div", "imp-pathrow");
+    const input = h("input", "field imp-path");
+    input.type = "text";
+    input.value = imp.path;
+    input.placeholder = "a folder path, or pick one below";
+    input.spellcheck = false;
+    input.dataset.f = "imp:path";
+    input.addEventListener("keydown", (e) => {
+      e.stopPropagation();
+      if (e.key === "Enter") { e.preventDefault(); browseTo(input.value.trim()); }
+    });
+    const open = h("button", "badge", "open");
+    open.type = "button";
+    open.addEventListener("click", () => browseTo(input.value.trim()));
+    row.append(input, open);
+    body.appendChild(row);
+    const b = imp.browse;
+    if (b) {
+      const list = h("div", "imp-dirs");
+      if (b.parent !== null) {
+        const up = h("button", "imp-dir up", b.parent ? "\u2191 up" : "\u2191 the allowed folders");
+        up.type = "button";
+        up.addEventListener("click", () => browseTo(b.parent));
+        list.appendChild(up);
+      }
+      for (const d of b.dirs) {
+        const btn = h("button", "imp-dir", (b.path ? "" : "\u2302 ") + d.name);
+        btn.type = "button";
+        btn.dataset.f = `imp:dir:${d.name}`;
+        btn.addEventListener("click", () => browseTo(d.path));
+        list.appendChild(btn);
+      }
+      if (!b.dirs.length) list.appendChild(h("p", "rf-note", b.path ? "No folders inside." : "No folders are allowed: set imports.roots in the YAML."));
+      body.appendChild(list);
+      if (b.path) body.appendChild(h("p", "rf-note", `${plural(b.images, "image", "images")} directly in this folder.`));
+    }
+    go.textContent = "scan this folder";
+    go.disabled = !imp.path;
+  } else if (imp.step === "scanning") {
+    body.appendChild(h("p", "imp-big", `Looking through ${imp.scan.path}\u2026`));
+    body.appendChild(h("p", "rf-note", `${plural(imp.scan.seen || 0, "file", "files")} so far. Images are checked by their header only, so this is quick even on network storage.`));
+    go.textContent = "cancel";
+  } else if (imp.step === "report") {
+    body.appendChild(renderReport());
+    back.hidden = false;
+    go.textContent = imp.link ? "link" : "import";
+    go.disabled = !imp.scan.report.images;
+  } else if (imp.step === "importing") {
+    const j = imp.job;
+    body.appendChild(h("p", "imp-big", `${j.link ? "Linking" : "Copying"} ${plural(j.total, "image", "images")} into ${plural(j.projects.length, "project", "projects")}\u2026`));
+    const bar = h("div", "rl-bar");
+    const fill = h("span");
+    fill.style.width = `${j.total ? Math.round((100 * j.done) / j.total) : 0}%`;
+    bar.appendChild(fill);
+    body.appendChild(bar);
+    body.appendChild(h("p", "rf-note", `${j.done} of ${j.total}` + (j.link ? "" : `, ${fmtBytes(j.bytes_done)} of ${fmtBytes(j.bytes_total)}`)
+      + (j.current ? ` \u2013 ${j.current}` : "") + ". Closing this window does not stop it."));
+    go.textContent = "cancel";
+  } else if (imp.step === "done") {
+    const j = imp.job;
+    body.appendChild(h("p", "imp-big", { done: "Imported.", cancelled: "Cancelled - what was copied stays; importing again finishes it.", failed: `Failed: ${j.error}` }[j.state] || j.state));
+    for (const r of j.results) {
+      const line = h("div", "imp-result");
+      const a = h("a", "", r.name);
+      a.href = `#/${encodeURIComponent(r.name)}`;
+      a.addEventListener("click", () => el.importDialog.close());
+      line.append(a, ` \u2013 ${plural(r.added, "image", "images")} ${j.link ? "linked" : "copied"}`
+        + (r.skipped ? `, ${r.skipped} already there` : "") + (r.failed ? `, ${r.failed} failed` : ""));
+      line.dataset.f = `imp:result:${r.name}`;
+      body.appendChild(line);
+      for (const p of r.problems || []) body.appendChild(h("p", "rf-note warn", p));
+    }
+    body.appendChild(h("p", "rf-note", "Each project keeps a record of where its images came from: import.json."));
+    go.textContent = "close";
+  }
+  el.importBody.replaceChildren(body);
+}
+
+function renderReport() {
+  const r = imp.scan.report;
+  const frag = document.createDocumentFragment();
+  const top = r.groups.find((g) => g.folder === "");
+  const subs = r.groups.filter((g) => g.folder !== "");
+  const shape = {
+    empty: "No images found in this folder.",
+    flat: `${plural(r.images, "image", "images")}, all directly in the folder.`,
+    nested: `${plural(r.images, "image", "images")} in ${plural(subs.length, "subfolder", "subfolders")}`
+      + (r.deepest > 1 ? `, some ${r.deepest} levels down` : "") + ".",
+    mixed: `${plural(r.images, "image", "images")}: ${top ? top.images : 0} directly in the folder, the rest in ${plural(subs.length, "subfolder", "subfolders")}.`,
+  }[r.shape];
+  frag.appendChild(h("p", "imp-big", `${r.path}`));
+  frag.appendChild(h("p", "", `${shape} ${fmtBytes(r.bytes)}.`));
+  const extra = [];
+  if (r.rejected_total) extra.push(`${plural(r.rejected_total, "file", "files")} refused (below)`);
+  if (r.junk) extra.push(`${r.junk} system file(s) skipped (.DS_Store, ._ files, Thumbs.db)`);
+  if (r.label_files) extra.push(`${plural(r.label_files, "text, JSON or XML file", "text, JSON or XML files")} not imported`);
+  if (r.other) extra.push(`${r.other} other file(s) not imported`);
+  if (extra.length) frag.appendChild(h("p", "rf-note", extra.join("; ") + "."));
+  for (const l of r.layouts) {
+    const what = {
+      project: `A project of this tool, at ${l.where}.`,
+      yolo: `A YOLO dataset: ${l.label_files} label files, for ${l.images_with_labels} of the images`
+        + (l.classes ? `; classes ${l.classes.join(", ")}.` : "."),
+      coco: `A COCO dataset (${l.file}): ${l.annotations} boxes on ${l.images} images`
+        + (l.classes && l.classes.length ? `; classes ${l.classes.join(", ")}.` : "."),
+      voc: `Pascal VOC labels: ${l.label_files} files.`,
+    }[l.kind];
+    const box = h("div", "imp-layout");
+    box.append(h("strong", "", what), " ", l.note);
+    frag.appendChild(box);
+  }
+  if (r.rejected_total) {
+    const det = h("details", "imp-rejected");
+    det.appendChild(h("summary", "", `${plural(r.rejected_total, "file", "files")} refused`));
+    for (const x of r.rejected) det.appendChild(h("div", "", `${x.file}: ${x.reason}`));
+    if (r.rejected_total > r.rejected.length) det.appendChild(h("div", "rf-note", `\u2026 and ${r.rejected_total - r.rejected.length} more`));
+    frag.appendChild(det);
+  }
+  if (!r.images) return frag;
+
+  // How: flat or per folder, copy or link.
+  const how = h("div", "imp-how");
+  const radio = (group, value, label, checked, onChange, disabled) => {
+    const l = h("label", "imp-radio" + (disabled ? " disabled" : ""));
+    const i = h("input");
+    i.type = "radio";
+    i.name = group;
+    i.value = value;
+    i.checked = checked;
+    i.disabled = !!disabled;
+    i.dataset.f = `imp:${group}:${value}`;
+    i.addEventListener("change", onChange);
+    l.append(i, label);
+    return l;
+  };
+  how.append(
+    radio("mode", "flat", "everything into one project, flat", imp.mode === "flat", () => { imp.mode = "flat"; renderImport(); }),
+    radio("mode", "per_folder", "each subfolder as a project of its own", imp.mode === "per_folder",
+          () => { imp.mode = "per_folder"; renderImport(); }, !subs.length));
+  frag.appendChild(how);
+
+  if (imp.mode === "flat") {
+    const row = h("div", "rf-row");
+    const name = h("input", "field rf-text");
+    name.value = imp.flatName;
+    name.dataset.f = "imp:flatname";
+    name.addEventListener("input", () => { imp.flatName = name.value; importMessage(""); });
+    name.addEventListener("keydown", (e) => e.stopPropagation());
+    row.append(h("span", "rf-label", "project name"), name);
+    frag.appendChild(row);
+    if (r.renamed_flat) {
+      frag.appendChild(h("p", "rf-note", `${plural(r.renamed_flat, "image shares", "images share")} a name with another one: `
+        + "they get their folder in their name (plot3__IMG_0001.jpg), and import.json records where each came from."));
+    }
+  } else {
+    const table = h("div", "imp-folders");
+    table.appendChild(h("div", "imp-frow imp-fhead", ""));
+    table.lastChild.append(h("span", "", ""), h("span", "", "folder"), h("span", "", "images"), h("span", "", "project name"));
+    for (const g of r.groups) {
+      const f = imp.folders[g.folder];
+      const row = h("div", "imp-frow");
+      const cb = h("input");
+      cb.type = "checkbox";
+      cb.checked = f.on;
+      cb.dataset.f = `imp:folder:${g.folder || "."}`;
+      cb.addEventListener("change", () => { f.on = cb.checked; renderImport(); });
+      const name = h("input", "field rf-text");
+      name.value = f.name;
+      name.disabled = !f.on;
+      name.dataset.f = `imp:name:${g.folder || "."}`;
+      name.addEventListener("input", () => { f.name = name.value; importMessage(""); });
+      name.addEventListener("keydown", (e) => e.stopPropagation());
+      const label = g.folder || "(images directly in the folder)";
+      row.append(cb, h("span", "imp-fname", label + (g.deeper ? " \u00b7 with subfolders, flattened" : "")),
+                 h("span", "", `${g.images} \u00b7 ${fmtBytes(g.bytes)}`), name);
+      table.appendChild(row);
+    }
+    frag.appendChild(table);
+  }
+
+  const chosen = imp.mode === "flat" ? r.bytes : r.groups.filter((g) => imp.folders[g.folder].on).reduce((s, g) => s + g.bytes, 0);
+  const copy = h("div", "imp-how");
+  copy.append(
+    radio("link", "copy", "copy the images", !imp.link, () => { imp.link = false; renderImport(); }),
+    radio("link", "link", "link to them where they are (nothing copied; the project depends on the source staying put)",
+          imp.link, () => { imp.link = true; renderImport(); }));
+  frag.appendChild(copy);
+  frag.appendChild(h("p", "rf-note" + (!imp.link && chosen > r.free * 0.95 ? " warn" : ""),
+    imp.link ? `Links to ${fmtBytes(chosen)} of images, in ${r.dest}.`
+             : `${fmtBytes(chosen)} to copy into ${r.dest}; ${fmtBytes(r.free)} free there.`
+               + (chosen > r.free * 0.95 ? " Not enough: link instead, or free some space." : "")));
+  return frag;
+}
+
+el.importBtn.addEventListener("click", openImport);
+el.importClose.addEventListener("click", closeImport);
+el.importDialog.addEventListener("cancel", (e) => { e.preventDefault(); closeImport(); });
+el.importBack.addEventListener("click", () => { imp.step = "pick"; importMessage(""); renderImport(); browseTo(imp.path); });
+el.importGo.addEventListener("click", () => {
+  if (imp.step === "pick") startScan();
+  else if (imp.step === "scanning") cancelImportJob(imp.scan);
+  else if (imp.step === "report") startImport();
+  else if (imp.step === "importing") cancelImportJob(imp.job);
+  else closeImport();
+});
 
 // ---------------------------------------------------------------- small commands
 
